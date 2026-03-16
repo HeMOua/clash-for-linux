@@ -349,6 +349,10 @@ ensure_subconverter() {
   local bin="${Server_Dir}/tools/subconverter/subconverter"
   local port="25500"
 
+  # 自动获取服务器IP
+  local host_ip
+  host_ip="$(hostname -I | awk '{print $1}')"
+
   # 没有二进制直接跳过
   if [ ! -x "$bin" ]; then
     echo "[WARN] subconverter bin not found: $bin"
@@ -358,20 +362,20 @@ ensure_subconverter() {
 
   # 已在监听则认为就绪
   if ss -lntp 2>/dev/null | grep -qE ":${port}[[:space:]]"; then
-    export SUBCONVERTER_URL="${SUBCONVERTER_URL:-http://127.0.0.1:${port}}"
+    export SUBCONVERTER_URL="${SUBCONVERTER_URL:-http://${host_ip}:${port}}"
     export SUBCONVERTER_READY="true"
     return 0
   fi
 
-  # 启动（后台）
+  # 启动（监听所有IP）
   echo "[INFO] starting subconverter..."
-  (cd "${Server_Dir}/tools/subconverter" && nohup "./subconverter" >/dev/null 2>&1 &)
+  (cd "${Server_Dir}/tools/subconverter" && nohup "./subconverter" -listen 0.0.0.0:${port} >/dev/null 2>&1 &)
 
   # 等待端口起来
   for _ in 1 2 3 4 5; do
     sleep 1
     if ss -lntp 2>/dev/null | grep -qE ":${port}[[:space:]]"; then
-      export SUBCONVERTER_URL="${SUBCONVERTER_URL:-http://127.0.0.1:${port}}"
+      export SUBCONVERTER_URL="${SUBCONVERTER_URL:-http://${host_ip}:${port}}"
       export SUBCONVERTER_READY="true"
       echo "[OK] subconverter ready at ${SUBCONVERTER_URL}"
       return 0
