@@ -35,6 +35,8 @@ Description=Clash for Linux (Mihomo)
 Documentation=https://github.com/wnlen/clash-for-linux
 After=network-online.target nss-lookup.target
 Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -55,7 +57,6 @@ ExecReload=/bin/kill -HUP \$MAINPID
 # 常驻策略：即使上层脚本正常退出，也要由 systemd 拉回
 Restart=always
 RestartSec=5s
-StartLimitIntervalSec=0
 
 # 停止与日志
 KillMode=mixed
