@@ -483,15 +483,18 @@ TEMP_DIR="$Install_Dir/temp"
 SECRET_VAL=""
 SECRET_FILE=""
 
-for f in \
-  "$TEMP_DIR/config.yaml" \
-  "$CONF_DIR/config.yaml"
-do
-  SECRET_VAL="$(read_secret_from_config "$f" 2>/dev/null || true)"
-  if [[ -n "$SECRET_VAL" ]]; then
-    SECRET_FILE="$f"
-    break
-  fi
+for _ in {1..15}; do
+  for f in \
+    "$TEMP_DIR/config.yaml" \
+    "$CONF_DIR/config.yaml"
+  do
+    SECRET_VAL="$(read_secret_from_config "$f" 2>/dev/null || true)"
+    if [[ -n "$SECRET_VAL" ]]; then
+      SECRET_FILE="$f"
+      break 2
+    fi
+  done
+  sleep 0.2
 done
 
 dash="http://${api_host}:${api_port}/ui"
@@ -500,9 +503,9 @@ log "🌐 Dashboard：$(url "$dash")"
 SHOW_FILE="${SECRET_FILE:-$CONF_DIR/config.yaml}"
 
 if [[ -n "$SECRET_VAL" ]]; then
-  MASKED="${SECRET_VAL:0:4}****${SECRET_VAL: -4}"
+  MASKED="${SECRET_VAL}"
   log "🔐 Secret：${C_YELLOW}${MASKED}${C_NC}"
-  log "   查看完整 Secret：$(cmd "sudo sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$SHOW_FILE\" | head -n 1")"
+  # log "   查看完整 Secret：$(cmd "sudo sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$SHOW_FILE\" | head -n 1")"
 else
   log "🔐 Secret：${C_YELLOW}启动中暂未读到（稍后再试）${C_NC}"
   log "   稍后查看：$(cmd "sudo sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$CONF_DIR/config.yaml\" | head -n 1")"
