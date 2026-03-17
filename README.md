@@ -68,7 +68,7 @@ sudo bash install.sh
 编辑 `.env` 文件，设置订阅地址：
 
 ```
-sudo bash -c 'echo "CLASH_URL=<订阅地址>" > /opt/clash-for-linux/.env'
+sudo bash -c 'echo "CLASH_URL=<订阅地址>" > /root/clash-for-linux/.env'
 ```
 
 配置完成后，**重启服务使配置生效**：
@@ -84,7 +84,15 @@ sudo systemctl restart clash-for-linux.service
 - `CLASH_SECRET` 为空时将自动生成
 - 端口支持设置为 `auto`，自动检测并分配
 - 其它架构可通过 `CLASH_BIN` 指定二进制路径，或命名为 `clash-linux-<arch>`
+------
 
+## ⚙️ 关闭自动更新订阅（可选）
+编辑 `.env` 文件，是否自动更新 Clash 订阅配置：
+true = 启动时检查订阅并重新下载/转换配置
+false = 禁用自动更新，直接使用本地已有 config.yaml
+```
+sudo bash -c 'echo "CLASH_AUTO_UPDATE=false" > /opt/clash-for-linux/.env'
+```
 ------
 
 ## 🌐 打开 Clash 管理面板（推荐）
@@ -111,7 +119,7 @@ http://127.0.0.1:9090/ui
 > 不建议直接将管理端口暴露到公网。
 
 如果想要**公网访问**
-编辑 `.env` 文件，设置公网访问（对外端口不用改，改了机器人也能扫到，密钥设置的长点就行）：
+编辑 `.env` 文件，设置公网访问（对外端口不用改，改了机器人也能扫到，密钥设置长点就行）：
 
 ```
 sudo bash -c 'echo "EXTERNAL_CONTROLLER=0.0.0.0:9090" > /opt/clash-for-linux/.env'
