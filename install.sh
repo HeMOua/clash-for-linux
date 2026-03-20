@@ -470,7 +470,10 @@ if [ -f "$Install_Dir/clashoff" ]; then
 fi
 
 # =========================
-# 友好收尾输出（闭环）
+#   友好收尾输出
+# - 不再强调瞬时 active / inactive
+# - 统一引导到 clashctl
+# - 兼容 systemd / 非 systemd
 # =========================
 
 section "安装完成"
@@ -478,28 +481,37 @@ ok "Clash for Linux 已安装至: $(path "${Install_Dir}")"
 
 log "📦 安装目录：$(path "${Install_Dir}")"
 log "👤 运行用户：${Service_User}:${Service_Group}"
-log "🔧 服务名称：${Service_Name}.service"
+log "🧩 管理入口：$(cmd "clashctl")"
 
 if command -v systemctl >/dev/null 2>&1; then
-  section "服务状态"
-
-  se="${Service_Enabled:-unknown}"
-  ss="${Service_Started:-unknown}"
-
-  [[ "$se" == "enabled" ]] && se_colored="$(good "$se")" || se_colored="$(bad "$se")"
-  [[ "$ss" == "active"  ]] && ss_colored="$(good "$ss")" || ss_colored="$(bad "$ss")"
-
-  log "🧷 开机自启：${se_colored}"
-  log "🟢 服务状态：${ss_colored}"
-
-  log ""
-  log "${C_BOLD}常用命令：${C_NC}"
-  log "  $(cmd "systemctl status ${Service_Name}.service")"
-  log "  $(cmd "systemctl restart ${Service_Name}.service")"
+  log "🔧 服务名称：${Service_Name}.service"
+else
+  log "🔧 运行模式：非 systemd 环境（将使用脚本模式兜底）"
 fi
 
 # =========================
-# Dashboard / Secret
+# 安装结果
+# 不在这里渲染瞬时运行态，避免误导
+# =========================
+section "安装结果"
+
+ok "核心文件已就位"
+ok "运行入口已收敛为 clashctl"
+
+if [[ -x "/usr/local/bin/clashctl" ]]; then
+  ok "命令已可用：$(cmd "clashctl")"
+else
+  warn "未检测到 /usr/local/bin/clashctl，请确认安装脚本是否已完成链接"
+fi
+
+log ""
+log "${C_BOLD}推荐下一步：${C_NC}"
+log "  1. $(cmd "clashctl generate")   # 生成运行配置"
+log "  2. $(cmd "clashctl start")      # 启动 Clash"
+log "  3. $(cmd "clashctl doctor")     # 健康检查"
+
+# =========================
+# 控制面板 / Secret
 # =========================
 section "控制面板"
 
@@ -534,16 +546,24 @@ fi
 
 CONF_DIR="$Install_Dir/conf"
 TEMP_DIR="$Install_Dir/temp"
+RUNTIME_DIR="$Install_Dir/runtime"
 
 SECRET_VAL=""
 SECRET_FILE=""
 
+read_secret_safe() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  read_secret_from_config "$f" 2>/dev/null || true
+}
+
 for _ in {1..15}; do
   for f in \
+    "$RUNTIME_DIR/config.yaml" \
     "$TEMP_DIR/config.yaml" \
     "$CONF_DIR/config.yaml"
   do
-    SECRET_VAL="$(read_secret_from_config "$f" 2>/dev/null || true)"
+    SECRET_VAL="$(read_secret_safe "$f")"
     if [[ -n "$SECRET_VAL" ]]; then
       SECRET_FILE="$f"
       break 2
@@ -555,16 +575,14 @@ done
 dash="http://${api_host}:${api_port}/ui"
 log "🌐 Dashboard：$(url "$dash")"
 
-SHOW_FILE="${SECRET_FILE:-$CONF_DIR/config.yaml}"
+SHOW_FILE="${SECRET_FILE:-$RUNTIME_DIR/config.yaml}"
 
 if [[ -n "$SECRET_VAL" ]]; then
-  MASKED="${SECRET_VAL}"
-  log "🔐 Secret：${C_YELLOW}${MASKED}${C_NC}"
-  # log "   查看完整 Secret：$(cmd "sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$SHOW_FILE\" | head -n 1")"
+  log "🔐 Secret：${C_YELLOW}${SECRET_VAL}${C_NC}"
 else
-  log "🔐 Secret：${C_YELLOW}启动中暂未读到（稍后再试）${C_NC}"
-  log "   稍后查看：$(cmd "sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$CONF_DIR/config.yaml\" | head -n 1")"
-  log "   也可检查运行态：$(cmd "sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$TEMP_DIR/config.yaml\" | head -n 1")"
+  log "🔐 Secret：${C_YELLOW}暂未读取到${C_NC}"
+  log "   启动后可查看：$(cmd "sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$RUNTIME_DIR/config.yaml\" | head -n 1")"
+  log "   或检查旧路径：$(cmd "sed -nE 's/^[[:space:]]*secret:[[:space:]]*//p' \"$TEMP_DIR/config.yaml\" | head -n 1")"
 fi
 
 # =========================
@@ -580,20 +598,41 @@ else
   warn "订阅地址未配置（必须）"
   log ""
   log "配置订阅地址："
-  log "  $(cmd "bash -c 'echo \"CLASH_URL=<订阅地址>\" > ${ENV_FILE}'")"
+  log "  $(cmd "bash -c 'printf \"%s\n\" \"CLASH_URL=<订阅地址>\" > \"${ENV_FILE}\"'")"
   log ""
-  log "配置完成后重启服务："
-  log "  $(cmd "systemctl restart ${Service_Name}.service")"
+  log "配置完成后执行："
+  log "  1. $(cmd "clashctl generate")"
+  log "  2. $(cmd "clashctl start")"
+  log "  3. $(cmd "clashctl doctor")"
 fi
 
 # =========================
-# 下一步
+# 常用命令（统一只教 clashctl）
 # =========================
-section "下一步开启代理（可选）"
+section "常用命令"
 
-log "  $(cmd "clashctl on")     # 开启当前终端代理"
-log "  $(cmd "clashctl off")    # 关闭当前终端代理"
-log "  $(cmd "clashctl status") # 查看状态"
+log "  $(cmd "clashctl status")    # 查看运行状态"
+log "  $(cmd "clashctl logs")      # 查看最近日志"
+log "  $(cmd "clashctl logs -f")   # 持续追踪日志"
+log "  $(cmd "clashctl stop")      # 停止 Clash"
+log "  $(cmd "clashctl restart")   # 重启 Clash"
+log "  $(cmd "clashctl doctor")    # 健康检查"
+
+# =========================
+# 终端代理（可选）
+# =========================
+section "终端代理（可选）"
+
+log "  $(cmd "clashctl on")        # 开启当前终端代理"
+log "  $(cmd "clashctl off")       # 关闭当前终端代理"
+
+# =========================
+# 旧入口收敛提示
+# =========================
+section "说明"
+
+log "旧脚本已收敛，请优先使用：$(cmd "clashctl")"
+log "不建议继续直接操作 restart.sh / update.sh / 手写 systemctl 命令"
 
 # =========================
 # 启动后快速诊断
@@ -602,6 +641,7 @@ sleep 1
 if command -v journalctl >/dev/null 2>&1; then
   if journalctl -u "${Service_Name}.service" -n 50 --no-pager 2>/dev/null \
      | grep -q "Clash订阅地址不可访问"; then
-    warn "服务启动异常：订阅不可用，请检查 CLASH_URL（可能过期 / 404 / 被墙）。"
+    warn "检测到启动异常：订阅不可用，请检查 CLASH_URL（可能过期 / 404 / 被墙）"
+    log "建议执行：$(cmd "clashctl doctor")"
   fi
 fi

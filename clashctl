@@ -263,6 +263,13 @@ cmd_update() {
 
 cmd_status() {
   local mode running="no"
+  local service_active="" service_enabled=""
+  local pid=""
+  local controller dashboard_url
+  local config_source generate_status generate_reason generate_at
+  local run_status run_mode run_pid run_at
+  local http_port dashboard_port
+  local secret_exists="no"
 
   mode="$(detect_mode)"
 
@@ -271,46 +278,132 @@ cmd_status() {
       if systemctl is-active --quiet "$SERVICE_NAME"; then
         running="yes"
       fi
+      service_active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+      service_enabled="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+      ;;
+    systemd-installed)
+      running="no"
+      service_active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+      service_enabled="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
       ;;
     script)
       if is_script_running; then
         running="yes"
       fi
+      pid="$(read_pid 2>/dev/null || true)"
       ;;
     none)
       running="no"
       ;;
   esac
 
-  echo "=== Clash Status ==="
-  echo "Mode       : $mode"
-  echo "Running    : $running"
-  echo "Config     : $RUNTIME_CONFIG"
+  generate_status="$(read_state_value LAST_GENERATE_STATUS || true)"
+  generate_reason="$(read_state_value LAST_GENERATE_REASON || true)"
+  config_source="$(read_state_value LAST_CONFIG_SOURCE || true)"
+  generate_at="$(read_state_value LAST_GENERATE_AT || true)"
 
-  if [ "$mode" = "systemd" ] && service_unit_exists; then
-    echo "Service    : installed"
-    echo "Active     : $(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
-    echo "Enabled    : $(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+  run_status="$(read_state_value LAST_RUN_STATUS || true)"
+  run_mode="$(read_state_value LAST_RUN_MODE || true)"
+  run_pid="$(read_state_value LAST_RUN_PID || true)"
+  run_at="$(read_state_value LAST_RUN_AT || true)"
+
+  controller="$(read_runtime_config_value "external-controller" || true)"
+  dashboard_url="$(cmd_ui --raw 2>/dev/null || true)"
+  http_port="$(http_port_from_config)"
+  dashboard_port="$(port_from_controller)"
+
+  if [ -n "$(read_runtime_config_value "secret" || true)" ]; then
+    secret_exists="yes"
   fi
 
-  if [ "$mode" = "script" ]; then
-    local pid
-    pid="$(read_pid 2>/dev/null || true)"
-    echo "PID        : ${pid:-unknown}"
+  echo "=== Clash Status ==="
+  echo "Project      : $PROJECT_DIR"
+  echo "Mode         : $mode"
+  echo "Running      : $running"
+  echo "Config       : $RUNTIME_CONFIG"
+
+  if [ -f "$RUNTIME_CONFIG" ]; then
+    echo "ConfigExists : yes"
+  else
+    echo "ConfigExists : no"
   fi
 
   if [ -f "$STATE_FILE" ]; then
-    echo "LastStatus : $(read_state_value LAST_GENERATE_STATUS || true)"
-    echo "LastReason : $(read_state_value LAST_GENERATE_REASON || true)"
-    echo "LastSource : $(read_state_value LAST_CONFIG_SOURCE || true)"
-    echo "LastAt     : $(read_state_value LAST_GENERATE_AT || true)"
+    echo "StateFile    : $STATE_FILE"
+  else
+    echo "StateFile    : missing"
   fi
 
-  local controller
-  controller="$(read_runtime_config_value "external-controller" || true)"
-  if [ -n "${controller:-}" ]; then
-    echo "Dashboard  : $(cmd_ui --raw)"
+  case "$mode" in
+    systemd|systemd-installed)
+      echo "Service      : installed"
+      echo "Active       : ${service_active:-unknown}"
+      echo "Enabled      : ${service_enabled:-unknown}"
+      ;;
+    script)
+      echo "Service      : script"
+      echo "PID          : ${pid:-unknown}"
+      ;;
+    none)
+      echo "Service      : none"
+      ;;
+  esac
+
+  echo "Generate     : ${generate_status:-unknown}"
+  if [ -n "${generate_reason:-}" ]; then
+    echo "GenReason    : $generate_reason"
   fi
+  if [ -n "${config_source:-}" ]; then
+    echo "ConfigSource : $config_source"
+  fi
+  if [ -n "${generate_at:-}" ]; then
+    echo "GeneratedAt  : $generate_at"
+  fi
+
+  if [ -n "${run_status:-}" ]; then
+    echo "RunStatus    : $run_status"
+  fi
+  if [ -n "${run_mode:-}" ]; then
+    echo "RunMode      : $run_mode"
+  fi
+  if [ -n "${run_pid:-}" ]; then
+    echo "RunPID       : $run_pid"
+  fi
+  if [ -n "${run_at:-}" ]; then
+    echo "RunAt        : $run_at"
+  fi
+
+  echo "ProxyPort    : $http_port"
+  echo "DashPort     : $dashboard_port"
+
+  if [ -n "${controller:-}" ]; then
+    echo "Controller   : $controller"
+  else
+    echo "Controller   : 127.0.0.1:9090 (fallback)"
+  fi
+
+  if [ -n "${dashboard_url:-}" ]; then
+    echo "Dashboard    : $dashboard_url"
+  fi
+
+  echo "Secret       : $secret_exists"
+
+  echo
+  case "$running" in
+    yes)
+      ok "status summary: running"
+      ;;
+    no)
+      if [ "$mode" = "systemd-installed" ]; then
+        warn "status summary: installed but not running"
+      else
+        warn "status summary: not running"
+      fi
+      ;;
+    *)
+      warn "status summary: unknown"
+      ;;
+  esac
 }
 
 doctor_ok() {
