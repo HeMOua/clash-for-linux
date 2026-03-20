@@ -402,7 +402,7 @@ fi
 source "$Server_Dir/scripts/resolve_clash.sh"
 
 ## 临时取消环境变量
-unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY || true
+unset http_proxy https_proxy no_proxy all_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY || true
 
 ########################################################
 # systemd 兜底：如果没有可用订阅 URL，则确保有 config.yaml
