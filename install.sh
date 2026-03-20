@@ -591,14 +591,9 @@ fi
 # =========================
 section "下一步开启代理（可选）"
 
-PROFILED_FILE="/etc/profile.d/clash-for-linux.sh"
-
-if [ -f "$PROFILED_FILE" ]; then
-  log "  $(cmd "source $PROFILED_FILE")"
-  log "  $(cmd "proxy_on")"
-else
-  log "  （未安装 Shell 代理快捷命令，跳过）"
-fi
+log "  $(cmd "clashctl on")     # 开启当前终端代理"
+log "  $(cmd "clashctl off")    # 关闭当前终端代理"
+log "  $(cmd "clashctl status") # 查看状态"
 
 # =========================
 # 启动后快速诊断
