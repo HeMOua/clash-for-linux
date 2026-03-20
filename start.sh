@@ -227,7 +227,7 @@ fix_external_ui_by_safe_paths() {
   [ -s "$cfg" ] || return 0
 
   # 先跑一次 test，把原因写入 test_out
-  "$bin" -t -f "$cfg" >"$test_out" 2>&1
+  run_config_test "$bin" "$cfg" "$test_out" "$CLASH_CONFIG_TEST_TIMEOUT"
   local rc=$?
   [ $rc -eq 0 ] && return 0
 
@@ -264,8 +264,33 @@ fix_external_ui_by_safe_paths() {
   upsert_yaml_kv "$cfg" "external-ui" "$ui_dst" || true
 
   # 再 test 一次
-  "$bin" -t -f "$cfg" >"$test_out" 2>&1
+  run_config_test "$bin" "$cfg" "$test_out" "$CLASH_CONFIG_TEST_TIMEOUT"
   return $?
+}
+
+is_geoip_mmdb_timeout_error() {
+  local test_out="$1"
+  [ -f "$test_out" ] || return 1
+
+  grep -qE "can't initial GeoIP|can't download MMDB|MMDB invalid|context deadline exceeded" "$test_out"
+}
+
+run_config_test() {
+  local bin="$1"
+  local cfg="$2"
+  local test_out="$3"
+  local timeout_sec="${4:-120}"
+
+  [ -x "$bin" ] || return 2
+  [ -f "$cfg" ] || return 2
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_sec}s" "$bin" -t -f "$cfg" >"$test_out" 2>&1
+    return $?
+  else
+    "$bin" -t -f "$cfg" >"$test_out" 2>&1
+    return $?
+  fi
 }
 
 # 设置默认值
@@ -279,6 +304,14 @@ EXTERNAL_CONTROLLER_ENABLED="${EXTERNAL_CONTROLLER_ENABLED:-true}"
 EXTERNAL_CONTROLLER="${EXTERNAL_CONTROLLER:-0.0.0.0:9090}"
 
 ALLOW_INSECURE_TLS="${ALLOW_INSECURE_TLS:-false}"
+
+# GeoIP / MMDB 测试失败处理策略
+# true: 若仅因 MMDB/GeoIP 下载超时导致 config test 失败，则跳过 test 继续启动
+# false: 保持严格模式，test 失败即回退/退出
+CLASH_SKIP_GEOIP_TEST_FAILURE="${CLASH_SKIP_GEOIP_TEST_FAILURE:-false}"
+
+# 配置测试超时时间（秒），避免看起来像“卡住”
+CLASH_CONFIG_TEST_TIMEOUT="${CLASH_CONFIG_TEST_TIMEOUT:-120}"
 
 # 端口与配置工具
 # shellcheck disable=SC1090
@@ -607,30 +640,48 @@ if [ "$SKIP_CONFIG_REBUILD" != "true" ] && [ "$CLASH_AUTO_UPDATE" = "true" ]; th
       sed -i -E "s#(health-check:[[:space:]]*\n[[:space:]]*url:[[:space:]]*['\"])http://#\1https://#g" "$CONFIG_FILE" 2>/dev/null || true
     fi
 
-    # 5) 自检：失败则回退到旧配置（注意：脚本 set -e + trap ERR，必须 set +e 包裹）
-    BIN="${Server_Dir}/bin/clash-linux-amd64"
+    # 5) 自检：失败则回退到旧配置；若仅因 MMDB/GeoIP 下载超时失败，可按开关选择跳过
+    BIN="$(resolve_clash_bin "$Server_Dir" "$CpuArch")"
     NEW_CFG="$CONFIG_FILE"
     OLD_CFG="${Conf_Dir}/config.yaml"
     TEST_OUT="$Temp_Dir/config.test.out"
 
     if [ -x "$BIN" ] && [ -f "$NEW_CFG" ]; then
-      # 先尝试自动修复 external-ui 的 SAFE_PATH 问题（内部会跑 -t）
+      echo "[INFO] testing config: $NEW_CFG"
+
+      # 先尝试自动修复 external-ui 的 SAFE_PATH 问题（内部会跑一次 test）
       set +e
       fix_external_ui_by_safe_paths "$BIN" "$NEW_CFG" "$TEST_OUT"
       test_rc=$?
       set -e
 
+      # 如果 SAFE_PATH 修复后仍失败，再跑一次带超时的标准 test，拿到最终错误
       if [ "$test_rc" -ne 0 ]; then
-        echo "[ERROR] Generated config invalid, rc=$test_rc, reason(file=$TEST_OUT, size=$(wc -c <"$TEST_OUT" 2>/dev/null || echo 0))" >&2
+        echo "[WARN] initial config test failed, retry with explicit timeout=${CLASH_CONFIG_TEST_TIMEOUT}s"
+        set +e
+        run_config_test "$BIN" "$NEW_CFG" "$TEST_OUT" "$CLASH_CONFIG_TEST_TIMEOUT"
+        test_rc=$?
+        set -e
+      fi
+
+      if [ "$test_rc" -ne 0 ]; then
+        echo "[ERROR] Generated config test failed, rc=$test_rc, reason(file=$TEST_OUT, size=$(wc -c <"$TEST_OUT" 2>/dev/null || echo 0))" >&2
         tail -n 120 "$TEST_OUT" >&2 || true
 
-        echo "[ERROR] fallback to last good config: $OLD_CFG" >&2
-        if [ -f "$OLD_CFG" ]; then
-          cp -f "$OLD_CFG" "$NEW_CFG"
+        if [ "${CLASH_SKIP_GEOIP_TEST_FAILURE:-false}" = "true" ] && is_geoip_mmdb_timeout_error "$TEST_OUT"; then
+          echo "[WARN] detected GeoIP/MMDB download timeout during config test" >&2
+          echo "[WARN] CLASH_SKIP_GEOIP_TEST_FAILURE=true, skip config test failure and continue startup" >&2
         else
-          echo "[FATAL] No valid config available, aborting startup" >&2
-          exit 1
+          echo "[ERROR] fallback to last good config: $OLD_CFG" >&2
+          if [ -f "$OLD_CFG" ]; then
+            cp -f "$OLD_CFG" "$NEW_CFG"
+          else
+            echo "[FATAL] No valid config available, aborting startup" >&2
+            exit 1
+          fi
         fi
+      else
+        echo "[INFO] config test passed"
       fi
     fi
 
