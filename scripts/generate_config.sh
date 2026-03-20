@@ -154,18 +154,18 @@ main() {
     # 片段订阅：这里先保留模板拼接逻辑
     TEMPLATE_FILE=""
 
-    if [ -s "$CONF_DIR/template_config.yaml" ]; then
-    TEMPLATE_FILE="$CONF_DIR/template_config.yaml"
-    elif [ -s "$TEMP_DIR/templete_config.yaml" ]; then
-    TEMPLATE_FILE="$TEMP_DIR/templete_config.yaml"
-    elif [ -s "$CONF_DIR/templete_config.yaml" ]; then
-    TEMPLATE_FILE="$CONF_DIR/templete_config.yaml"
-    elif [ -s "$PROJECT_DIR/temp/templete_config.yaml" ]; then
-    TEMPLATE_FILE="$PROJECT_DIR/temp/templete_config.yaml"
+    if [ -s "$CONF_DIR/template.yaml" ]; then
+    TEMPLATE_FILE="$CONF_DIR/template.yaml"
+    elif [ -s "$TEMP_DIR/template.yaml" ]; then
+    TEMPLATE_FILE="$TEMP_DIR/template.yaml"
+    elif [ -s "$CONF_DIR/template.yaml" ]; then
+    TEMPLATE_FILE="$CONF_DIR/template.yaml"
+    elif [ -s "$PROJECT_DIR/temp/template.yaml" ]; then
+    TEMPLATE_FILE="$PROJECT_DIR/temp/template.yaml"
     fi
 
     if [ -z "$TEMPLATE_FILE" ]; then
-    echo "[ERROR] missing template config file (template_config.yaml / templete_config.yaml)" >&2
+    echo "[ERROR] missing template config file (template.yaml / template.yaml)" >&2
     write_state "failed" "missing_template" "none"
     exit 1
     fi
