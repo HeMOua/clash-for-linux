@@ -3,19 +3,22 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$PROJECT_DIR/runtime"
-CONF_DIR="$PROJECT_DIR/conf"
-TEMP_DIR="$PROJECT_DIR/temp"
+CONFIG_DIR="$PROJECT_DIR/config"
 LOG_DIR="$PROJECT_DIR/logs"
 
 RUNTIME_CONFIG="$RUNTIME_DIR/config.yaml"
 STATE_FILE="$RUNTIME_DIR/state.env"
-TEMP_DOWNLOAD="$TEMP_DIR/clash.yaml"
-TEMP_CONVERTED="$TEMP_DIR/clash_config.yaml"
 
-mkdir -p "$RUNTIME_DIR" "$CONF_DIR" "$TEMP_DIR" "$LOG_DIR"
+TMP_DOWNLOAD="$RUNTIME_DIR/subscription.raw.yaml"
+TMP_NORMALIZED="$RUNTIME_DIR/subscription.normalized.yaml"
+TMP_PROXY_FRAGMENT="$RUNTIME_DIR/proxy.fragment.yaml"
 
-# shellcheck disable=SC1091
-source "$PROJECT_DIR/.env"
+mkdir -p "$RUNTIME_DIR" "$CONFIG_DIR" "$LOG_DIR"
+
+if [ -f "$PROJECT_DIR/.env" ]; then
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/.env"
+fi
 
 # shellcheck disable=SC1091
 source "$PROJECT_DIR/scripts/get_cpu_arch.sh"
@@ -58,8 +61,9 @@ EOF
 generate_secret() {
   if [ -n "${CLASH_SECRET:-}" ]; then
     echo "$CLASH_SECRET"
-    return
+    return 0
   fi
+
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 16
   else
@@ -69,8 +73,11 @@ generate_secret() {
 
 SECRET="$(generate_secret)"
 
-upsert_yaml_kv() {
-  local file="$1" key="$2" value="$3"
+upsert_yaml_kv_local() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
   [ -f "$file" ] || touch "$file"
 
   if grep -qE "^[[:space:]]*${key}:" "$file"; then
@@ -80,110 +87,102 @@ upsert_yaml_kv() {
   fi
 }
 
-force_write_secret() {
+apply_secret_to_config() {
   local file="$1"
-  upsert_yaml_kv "$file" "secret" "$SECRET"
+  upsert_yaml_kv_local "$file" "secret" "$SECRET"
 }
 
-force_write_controller_and_ui() {
+apply_controller_to_config() {
   local file="$1"
 
   if [ "$EXTERNAL_CONTROLLER_ENABLED" = "true" ]; then
-    upsert_yaml_kv "$file" "external-controller" "$EXTERNAL_CONTROLLER"
+    upsert_yaml_kv_local "$file" "external-controller" "$EXTERNAL_CONTROLLER"
 
     mkdir -p "$RUNTIME_DIR"
     ln -sfn "$PROJECT_DIR/dashboard/public" "$RUNTIME_DIR/ui"
 
-    upsert_yaml_kv "$file" "external-ui" "$RUNTIME_DIR/ui"
+    upsert_yaml_kv_local "$file" "external-ui" "$RUNTIME_DIR/ui"
   fi
 }
 
 download_subscription() {
   [ -n "$CLASH_URL" ] || return 1
 
-  local curl_cmd=(curl -fL -S --retry 2 --connect-timeout 10 -m 30 -o "$TEMP_DOWNLOAD")
+  local curl_cmd=(curl -fL -S --retry 2 --connect-timeout 10 -m 30 -o "$TMP_DOWNLOAD")
   [ "$ALLOW_INSECURE_TLS" = "true" ] && curl_cmd+=(-k)
   curl_cmd+=("$CLASH_URL")
 
   "${curl_cmd[@]}"
 }
 
-use_fallback() {
-  [ -s "$CONF_DIR/fallback_config.yaml" ] || return 1
-  cp -f "$CONF_DIR/fallback_config.yaml" "$RUNTIME_CONFIG"
-  force_write_controller_and_ui "$RUNTIME_CONFIG"
-  force_write_secret "$RUNTIME_CONFIG"
-}
-
-is_full_config() {
+is_complete_clash_config() {
   local file="$1"
   grep -qE '^(proxies:|proxy-providers:|mixed-port:|port:)' "$file"
 }
 
+cleanup_tmp_files() {
+  rm -f "$TMP_NORMALIZED" "$TMP_PROXY_FRAGMENT"
+}
+
 main() {
-    if [ "$CLASH_AUTO_UPDATE" != "true" ]; then
-        if [ -s "$RUNTIME_CONFIG" ]; then
-        write_state "success" "auto_update_disabled_keep_runtime" "runtime_existing"
-        exit 0
-        fi
-        use_fallback
-        write_state "success" "auto_update_disabled_use_fallback" "fallback"
-        exit 0
+  local template_file="$CONFIG_DIR/template.yaml"
+
+  if [ "$CLASH_AUTO_UPDATE" != "true" ]; then
+    if [ -s "$RUNTIME_CONFIG" ]; then
+      write_state "success" "auto_update_disabled_keep_runtime" "runtime_existing"
+      exit 0
     fi
 
-    if ! download_subscription; then
-        if [ -s "$RUNTIME_CONFIG" ]; then
-        write_state "success" "download_failed_keep_last_good" "runtime_existing"
-        exit 0
-        fi
-        use_fallback
-        write_state "success" "download_failed_use_fallback" "fallback"
-        exit 0
-    fi
-
-    cp -f "$TEMP_DOWNLOAD" "$TEMP_CONVERTED"
-
-    if is_full_config "$TEMP_CONVERTED"; then
-        cp -f "$TEMP_CONVERTED" "$RUNTIME_CONFIG"
-        force_write_controller_and_ui "$RUNTIME_CONFIG"
-        force_write_secret "$RUNTIME_CONFIG"
-        write_state "success" "subscription_full" "subscription_full"
-        exit 0
-    fi
-
-    # 片段订阅：这里先保留模板拼接逻辑
-    TEMPLATE_FILE=""
-
-    if [ -s "$CONF_DIR/template.yaml" ]; then
-    TEMPLATE_FILE="$CONF_DIR/template.yaml"
-    elif [ -s "$TEMP_DIR/template.yaml" ]; then
-    TEMPLATE_FILE="$TEMP_DIR/template.yaml"
-    elif [ -s "$CONF_DIR/template.yaml" ]; then
-    TEMPLATE_FILE="$CONF_DIR/template.yaml"
-    elif [ -s "$PROJECT_DIR/temp/template.yaml" ]; then
-    TEMPLATE_FILE="$PROJECT_DIR/temp/template.yaml"
-    fi
-
-    if [ -z "$TEMPLATE_FILE" ]; then
-    echo "[ERROR] missing template config file (template.yaml / template.yaml)" >&2
-    write_state "failed" "missing_template" "none"
+    echo "[ERROR] auto update disabled and runtime config missing: $RUNTIME_CONFIG" >&2
+    write_state "failed" "runtime_missing" "none"
     exit 1
+  fi
+
+  if ! download_subscription; then
+    if [ -s "$RUNTIME_CONFIG" ]; then
+      write_state "success" "download_failed_keep_runtime" "runtime_existing"
+      exit 0
     fi
 
-    sed -n '/^proxies:/,$p' "$TEMP_CONVERTED" > "$TEMP_DIR/proxy.txt"
-    cat "$TEMPLATE_FILE" > "$RUNTIME_CONFIG"
-    cat "$TEMP_DIR/proxy.txt" >> "$RUNTIME_CONFIG"
+    echo "[ERROR] failed to download subscription and runtime config missing" >&2
+    write_state "failed" "download_failed" "none"
+    exit 1
+  fi
 
-    sed -i "s/CLASH_HTTP_PORT_PLACEHOLDER/${CLASH_HTTP_PORT}/g" "$RUNTIME_CONFIG"
-    sed -i "s/CLASH_SOCKS_PORT_PLACEHOLDER/${CLASH_SOCKS_PORT}/g" "$RUNTIME_CONFIG"
-    sed -i "s/CLASH_REDIR_PORT_PLACEHOLDER/${CLASH_REDIR_PORT}/g" "$RUNTIME_CONFIG"
-    sed -i "s/CLASH_LISTEN_IP_PLACEHOLDER/${CLASH_LISTEN_IP}/g" "$RUNTIME_CONFIG"
-    sed -i "s/CLASH_ALLOW_LAN_PLACEHOLDER/${CLASH_ALLOW_LAN}/g" "$RUNTIME_CONFIG"
+  cp -f "$TMP_DOWNLOAD" "$TMP_NORMALIZED"
 
-    force_write_controller_and_ui "$RUNTIME_CONFIG"
-    force_write_secret "$RUNTIME_CONFIG"
+  if is_complete_clash_config "$TMP_NORMALIZED"; then
+    cp -f "$TMP_NORMALIZED" "$RUNTIME_CONFIG"
+    apply_controller_to_config "$RUNTIME_CONFIG"
+    apply_secret_to_config "$RUNTIME_CONFIG"
+    write_state "success" "subscription_full" "subscription_full"
+    cleanup_tmp_files
+    exit 0
+  fi
 
-    write_state "success" "subscription_fragment_merged" "subscription_fragment"
+  if [ ! -s "$template_file" ]; then
+    echo "[ERROR] missing template config file: $template_file" >&2
+    write_state "failed" "missing_template" "none"
+    cleanup_tmp_files
+    exit 1
+  fi
+
+  sed -n '/^proxies:/,$p' "$TMP_NORMALIZED" > "$TMP_PROXY_FRAGMENT"
+
+  cat "$template_file" > "$RUNTIME_CONFIG"
+  cat "$TMP_PROXY_FRAGMENT" >> "$RUNTIME_CONFIG"
+
+  sed -i "s/CLASH_HTTP_PORT_PLACEHOLDER/${CLASH_HTTP_PORT}/g" "$RUNTIME_CONFIG"
+  sed -i "s/CLASH_SOCKS_PORT_PLACEHOLDER/${CLASH_SOCKS_PORT}/g" "$RUNTIME_CONFIG"
+  sed -i "s/CLASH_REDIR_PORT_PLACEHOLDER/${CLASH_REDIR_PORT}/g" "$RUNTIME_CONFIG"
+  sed -i "s/CLASH_LISTEN_IP_PLACEHOLDER/${CLASH_LISTEN_IP}/g" "$RUNTIME_CONFIG"
+  sed -i "s/CLASH_ALLOW_LAN_PLACEHOLDER/${CLASH_ALLOW_LAN}/g" "$RUNTIME_CONFIG"
+
+  apply_controller_to_config "$RUNTIME_CONFIG"
+  apply_secret_to_config "$RUNTIME_CONFIG"
+
+  write_state "success" "subscription_fragment_merged" "subscription_fragment"
+  cleanup_tmp_files
 }
 
 main "$@"

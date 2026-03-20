@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$PROJECT_DIR/runtime"
 PID_FILE="$RUNTIME_DIR/clash.pid"
+STATE_FILE="$RUNTIME_DIR/state.env"
 SERVICE_NAME="clash-for-linux.service"
 
 mkdir -p "$RUNTIME_DIR"
@@ -15,6 +16,17 @@ has_systemd() {
 service_unit_exists() {
   has_systemd || return 1
   systemctl show "$SERVICE_NAME" -p LoadState --value 2>/dev/null | grep -q '^loaded$'
+}
+
+read_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  cat "$PID_FILE"
+}
+
+is_script_running() {
+  local pid
+  pid="$(read_pid 2>/dev/null || true)"
+  [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null
 }
 
 detect_mode() {
@@ -29,15 +41,38 @@ detect_mode() {
   fi
 }
 
-read_pid() {
-  [ -f "$PID_FILE" ] || return 1
-  cat "$PID_FILE"
-}
+write_run_state() {
+  local status="$1"
+  local mode="${2:-unknown}"
+  local pid="${3:-}"
 
-is_script_running() {
-  local pid
-  pid="$(read_pid 2>/dev/null || true)"
-  [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null
+  touch "$STATE_FILE"
+
+  if grep -q '^LAST_RUN_STATUS=' "$STATE_FILE" 2>/dev/null; then
+    sed -i -E "s/^LAST_RUN_STATUS=.*/LAST_RUN_STATUS=${status}/" "$STATE_FILE"
+  else
+    echo "LAST_RUN_STATUS=${status}" >> "$STATE_FILE"
+  fi
+
+  if grep -q '^LAST_RUN_MODE=' "$STATE_FILE" 2>/dev/null; then
+    sed -i -E "s/^LAST_RUN_MODE=.*/LAST_RUN_MODE=${mode}/" "$STATE_FILE"
+  else
+    echo "LAST_RUN_MODE=${mode}" >> "$STATE_FILE"
+  fi
+
+  if grep -q '^LAST_RUN_AT=' "$STATE_FILE" 2>/dev/null; then
+    sed -i -E "s/^LAST_RUN_AT=.*/LAST_RUN_AT=$(date -Iseconds)/" "$STATE_FILE"
+  else
+    echo "LAST_RUN_AT=$(date -Iseconds)" >> "$STATE_FILE"
+  fi
+
+  if [ -n "$pid" ]; then
+    if grep -q '^LAST_RUN_PID=' "$STATE_FILE" 2>/dev/null; then
+      sed -i -E "s/^LAST_RUN_PID=.*/LAST_RUN_PID=${pid}/" "$STATE_FILE"
+    else
+      echo "LAST_RUN_PID=${pid}" >> "$STATE_FILE"
+    fi
+  fi
 }
 
 start_via_systemd() {
@@ -46,6 +81,8 @@ start_via_systemd() {
 
 stop_via_systemd() {
   systemctl stop "$SERVICE_NAME"
+  write_run_state "stopped" "systemd"
+  rm -f "$PID_FILE"
 }
 
 restart_via_systemd() {
@@ -63,6 +100,7 @@ start_via_script() {
 stop_via_script() {
   local pid
   pid="$(read_pid 2>/dev/null || true)"
+
   if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
     echo "[INFO] stopping clash pid=$pid"
     kill "$pid"
@@ -71,16 +109,10 @@ stop_via_script() {
       kill -9 "$pid" 2>/dev/null || true
     fi
   fi
-  rm -f "$PID_FILE"
-  if [ -f "$PROJECT_DIR/runtime/state.env" ]; then
-    if grep -q '^LAST_RUN_STATUS=' "$PROJECT_DIR/runtime/state.env" 2>/dev/null; then
-      sed -i -E "s/^LAST_RUN_STATUS=.*/LAST_RUN_STATUS=stopped/" "$PROJECT_DIR/runtime/state.env"
-    else
-      echo "LAST_RUN_STATUS=stopped" >> "$PROJECT_DIR/runtime/state.env"
-    fi
-  fi
-}
 
+  rm -f "$PID_FILE"
+  write_run_state "stopped" "script"
+}
 
 restart_via_script() {
   stop_via_script || true

@@ -41,9 +41,28 @@ fi
 
 # shellcheck disable=SC1091
 source "$PROJECT_DIR/scripts/get_cpu_arch.sh"
+# shellcheck disable=SC1091
 source "$PROJECT_DIR/scripts/resolve_clash.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/scripts/service_lib.sh"
 
 CLASH_BIN="$(resolve_clash_bin "$PROJECT_DIR" "${CpuArch:-}")"
+
+if [ ! -x "$CLASH_BIN" ]; then
+  echo "[ERROR] clash binary not found or not executable: $CLASH_BIN" >&2
+  exit 2
+fi
+
+test_config() {
+  local bin="$1"
+  local config="$2"
+  "$bin" -t -f "$config" >/dev/null 2>&1
+}
+
+if ! test_config "$CLASH_BIN" "$CONFIG_FILE"; then
+  echo "[ERROR] config test failed: $CONFIG_FILE" >&2
+  exit 2
+fi
 
 # systemd 模式
 if [ "$FOREGROUND" = true ]; then
