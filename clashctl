@@ -162,22 +162,22 @@ cmd_mode() {
 }
 
 cmd_start() {
-  local mode
-  mode="$(detect_mode)"
+	local mode
+	mode="$(detect_mode)"
 
-  case "$mode" in
-    systemd)
-      start_via_systemd
-      ok "Clash started via systemd"
-      ;;
-    script|none)
-      start_via_script
-      ;;
-    *)
-      err "未知模式: $mode"
-      exit 1
-      ;;
-  esac
+	case "$mode" in
+	systemd|systemd-installed)
+		start_via_systemd
+		ok "Clash started via systemd"
+		;;
+	script|none)
+		start_via_script
+		;;
+	*)
+		err "未知模式: $mode"
+		exit 1
+		;;
+	esac
 }
 
 cmd_stop() {
@@ -215,25 +215,25 @@ cmd_generate() {
 }
 
 cmd_restart() {
-  "$PROJECT_DIR/scripts/generate_config.sh"
+	"$PROJECT_DIR/scripts/generate_config.sh"
 
-  local mode
-  mode="$(detect_mode)"
+	local mode
+	mode="$(detect_mode)"
 
-  case "$mode" in
-    systemd)
-      restart_via_systemd
-      ok "Clash restarted via systemd"
-      ;;
-    script|none)
-      restart_via_script
-      ok "Clash restarted via script mode"
-      ;;
-    *)
-      err "未知模式: $mode"
-      exit 1
-      ;;
-  esac
+	case "$mode" in
+	systemd|systemd-installed)
+		restart_via_systemd
+		ok "Clash restarted via systemd"
+		;;
+	script|none)
+		restart_via_script
+		ok "Clash restarted via script mode"
+		;;
+	*)
+		err "未知模式: $mode"
+		exit 1
+		;;
+	esac
 }
 
 cmd_update() {
