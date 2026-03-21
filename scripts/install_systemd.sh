@@ -35,7 +35,7 @@ Group=${SERVICE_GROUP}
 WorkingDirectory=${PROJECT_DIR}
 Environment=HOME=/root
 
-ExecStart=${PROJECT_DIR}/clashctl start
+ExecStart=${PROJECT_DIR}/scripts/run_clash.sh --foreground
 ExecStop=${PROJECT_DIR}/clashctl --from-systemd stop
 ExecReload=${PROJECT_DIR}/clashctl restart
 
