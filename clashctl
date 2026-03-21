@@ -273,7 +273,7 @@ cmd_stop() {
 }
 
 cmd_update() {
-  local branch remote_name dirty
+  local branch remote_name dirty pull_ok=1
 
   if ! has_git_repo; then
     err "当前目录不是 Git 仓库: $PROJECT_DIR"
@@ -288,17 +288,55 @@ cmd_update() {
 
   remote_name="origin"
 
-  dirty="$(git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)"
-  if [ -n "${dirty:-}" ]; then
-    err "检测到本地已修改但未提交的文件，已停止更新"
-    echo "请先提交、stash 或恢复后再执行 clashctl update" >&2
-    exit 1
+  # 保护本地 .env（如果你已经把 .env 忽略掉，这段也保留，兜底更稳）
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    cp -f "$PROJECT_DIR/.env" "$PROJECT_DIR/.env.bak" 2>/dev/null || true
   fi
 
-  echo "[INFO] pulling latest code from ${remote_name}/${branch} ..."
-  if ! git -C "$PROJECT_DIR" pull --ff-only "$remote_name" "$branch"; then
-    err "git pull 失败"
-    exit 1
+  dirty="$(git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)"
+  if [ -n "${dirty:-}" ]; then
+    echo "[WARN] 检测到本地已修改但未提交的文件，自动切换到安全强制更新模式"
+    pull_ok=0
+  fi
+
+  if [ "$pull_ok" -eq 1 ]; then
+    echo "[INFO] pulling latest code from ${remote_name}/${branch} ..."
+    if ! git -C "$PROJECT_DIR" pull --ff-only "$remote_name" "$branch"; then
+      echo "[WARN] git pull 失败，自动切换到强制更新模式"
+      pull_ok=0
+    fi
+  fi
+
+  if [ "$pull_ok" -eq 0 ]; then
+    echo "[INFO] fetching latest code from ${remote_name}/${branch} ..."
+    if ! git -C "$PROJECT_DIR" fetch "$remote_name" "$branch"; then
+      err "git fetch 失败"
+      exit 1
+    fi
+
+    echo "[WARN] resetting local code to ${remote_name}/${branch}"
+    if ! git -C "$PROJECT_DIR" reset --hard "${remote_name}/${branch}"; then
+      err "git reset --hard 失败"
+      exit 1
+    fi
+  fi
+
+  # 恢复 .env
+  if [ -f "$PROJECT_DIR/.env.bak" ]; then
+    mv -f "$PROJECT_DIR/.env.bak" "$PROJECT_DIR/.env" 2>/dev/null || true
+  fi
+
+  # 修复脚本权限，避免 203/EXEC
+  echo "[INFO] fixing executable permissions ..."
+  chmod +x "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
+  chmod +x "$PROJECT_DIR"/bin/* 2>/dev/null || true
+  sed -i 's/\r$//' "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
+
+  # 先停服务，避免 generate 时误判端口占用导致漂移
+  echo "[INFO] stopping service before regenerate ..."
+  if has_systemd; then
+    systemctl stop clash-for-linux.service 2>/dev/null || true
+    sleep 1
   fi
 
   echo "[INFO] regenerating config ..."
@@ -309,19 +347,35 @@ cmd_update() {
 
   echo "[INFO] restarting service ..."
   if has_systemd; then
-    if ! systemctl restart clash-for-linux.service; then
-      err "systemd 重启失败"
+    if ! systemctl start clash-for-linux.service; then
+      err "systemd 启动失败"
       exit 1
     fi
+
+    echo "[INFO] waiting for service to be active ..."
+    local i state
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      state="$(systemctl is-active clash-for-linux.service 2>/dev/null || true)"
+      if [ "$state" = "active" ]; then
+        ok "更新完成"
+        cmd_status
+        return 0
+      fi
+      sleep 1
+    done
+
+    err "服务启动未就绪"
+    systemctl status clash-for-linux.service -l --no-pager || true
+    exit 1
   else
     if ! "$PROJECT_DIR/scripts/run_clash.sh" --daemon; then
       err "脚本模式启动失败"
       exit 1
     fi
-  fi
 
-  ok "更新完成"
-  cmd_status
+    ok "更新完成"
+    cmd_status
+  fi
 }
 
 cmd_update_force() {
@@ -389,16 +443,51 @@ cmd_update_force() {
   cmd_status
 }
 
+# === 修复执行权限 ===
+fix_exec_permissions() {
+  local dir="${PROJECT_DIR:-$(pwd)}"
+
+  chmod +x "$dir"/scripts/*.sh 2>/dev/null || true
+  chmod +x "$dir"/bin/* 2>/dev/null || true
+
+  # 可选：修复 CRLF（防止 Windows 换行）
+  sed -i 's/\r$//' "$dir"/scripts/*.sh 2>/dev/null || true
+}
+
+# === 等待 service 进入 active ===
+wait_for_service_active() {
+  local svc="${1:-clash-for-linux.service}"
+  local timeout="${2:-10}"
+
+  for ((i=0; i<timeout; i++)); do
+    state=$(systemctl is-active "$svc" 2>/dev/null || true)
+    if [ "$state" = "active" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+# === 获取实际端口（从 runtime/config.yaml 解析）===
+get_actual_ports() {
+  local cfg="$PROJECT_DIR/runtime/config.yaml"
+
+  if [ ! -f "$cfg" ]; then
+    return
+  fi
+
+  ACTUAL_HTTP_PORT=$(grep -E '^mixed-port:' "$cfg" | awk '{print $2}' | tr -d '\r')
+  ACTUAL_CTRL_PORT=$(grep -E '^external-controller:' "$cfg" | awk -F':' '{print $NF}' | tr -d '\r')
+
+  export ACTUAL_HTTP_PORT ACTUAL_CTRL_PORT
+}
+
 cmd_restart() {
   cmd_generate
   cmd_stop "${1:-false}" || true
   cmd_start
-}
-
-cmd_update() {
-  git -C "$PROJECT_DIR" pull
-  cmd_restart
-  ok "Project updated"
 }
 
 cmd_ui() {
@@ -1039,7 +1128,12 @@ main() {
       cmd_status
       ;;
     update)
-      cmd_update
+      shift
+      cmd_update "$@"
+      ;;
+    update-force)
+      shift
+      cmd_update_force "$@"
       ;;
     generate)
       cmd_generate
@@ -1058,14 +1152,7 @@ main() {
       shift || true
       cmd_sub "${1:-show}"
       ;;
-    update)
-      shift
-      cmd_update "$@"
-      ;;
-    update-force)
-      shift
-      cmd_update_force "$@"
-      ;;
+
     tun)
       shift || true
       cmd_tun "${1:-status}"
