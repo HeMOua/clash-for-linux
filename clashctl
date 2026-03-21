@@ -70,20 +70,20 @@ Commands:
   off                    关闭当前终端代理
   start                  启动 Clash
   stop                   停止 Clash
-  restart                重新生成配置并重启
+  restart                重启并自动应用当前配置
   status                 查看当前状态
-  generate               仅生成配置，不启动
-  update                 拉取当前分支最新代码并重新生成配置、重启服务
-  update-force           强制覆盖本地修改后更新并重启
+  update                 更新到最新版本并自动应用配置
   mode                   查看当前运行模式（systemd/script/none）
   ui                     输出 Dashboard 地址
   secret                 输出当前 secret
   doctor                 健康检查
   logs [-f] [-n 100]     查看日志
-  update                 git pull + 重新生成配置并重启
-  sub show|update        查看订阅地址 / 重新生成配置并重启
+  sub show|update        查看订阅地址 / 更新订阅并应用配置
   tun status|on|off      查看/启用/关闭 Tun
   mixin status|on|off    查看/启用/关闭 Mixin
+
+Advanced Commands:
+  generate               生成配置（调试用，不会启动服务）
 
 Options:
   --from-systemd         内部使用，避免 stop 递归调用 systemctl
@@ -102,15 +102,19 @@ read_runtime_config_value() {
   local key="$1"
   [ -f "$RUNTIME_CONFIG" ] || return 1
 
-  awk -F': *' -v k="$key" '
-    $1 == k {
-      gsub("\r", "", $2)
-      val = $2
-      sub(/^"/, "", val)
-      sub(/"$/, "", val)
-      sub(/^'\''/, "", val)
-      sub(/'\''$/, "", val)
-      print val
+  awk -v k="$key" '
+    $0 ~ "^[[:space:]]*" k ":[[:space:]]*" {
+      line = $0
+      sub("^[[:space:]]*" k ":[[:space:]]*", "", line)
+      gsub("\r", "", line)
+
+      # 去掉首尾引号
+      sub(/^"/, "", line)
+      sub(/"$/, "", line)
+      sub(/^'\''/, "", line)
+      sub(/'\''$/, "", line)
+
+      print line
       exit
     }
   ' "$RUNTIME_CONFIG"
