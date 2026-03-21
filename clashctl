@@ -102,10 +102,18 @@ read_runtime_config_value() {
   local key="$1"
   [ -f "$RUNTIME_CONFIG" ] || return 1
 
-  sed -nE "s/^[[:space:]]*${key}:[[:space:]]*//p" "$RUNTIME_CONFIG" \
-    | head -n 1 \
-    | tr -d '\r' \
-    | sed -E 's/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/'
+  awk -F': *' -v k="$key" '
+    $1 == k {
+      gsub("\r", "", $2)
+      val = $2
+      sub(/^"/, "", val)
+      sub(/"$/, "", val)
+      sub(/^'\''/, "", val)
+      sub(/'\''$/, "", val)
+      print val
+      exit
+    }
+  ' "$RUNTIME_CONFIG"
 }
 
 write_env_bool() {
@@ -137,11 +145,8 @@ command_exists() {
 port_from_controller() {
   local controller
   controller="$(read_runtime_config_value "external-controller" || true)"
-  if [ -n "${controller:-}" ]; then
-    printf '%s\n' "${controller##*:}"
-  else
-    printf '9090\n'
-  fi
+  [ -n "${controller:-}" ] || return 1
+  printf '%s\n' "${controller##*:}"
 }
 
 http_port_from_config() {
@@ -159,7 +164,7 @@ http_port_from_config() {
     return 0
   fi
 
-  printf '7890\n'
+  return 1
 }
 
 check_port_listening() {
@@ -474,16 +479,34 @@ wait_for_service_active() {
 get_actual_ports() {
   local cfg="$PROJECT_DIR/runtime/config.yaml"
 
-  if [ ! -f "$cfg" ]; then
-    return
-  fi
+  ACTUAL_HTTP_PORT=""
+  ACTUAL_CTRL_PORT=""
 
-  ACTUAL_HTTP_PORT=$(grep -E '^mixed-port:' "$cfg" | awk '{print $2}' | tr -d '\r')
-  ACTUAL_CTRL_PORT=$(grep -E '^external-controller:' "$cfg" | awk -F':' '{print $NF}' | tr -d '\r')
+  [ -f "$cfg" ] || return
+
+  # mixed-port
+  ACTUAL_HTTP_PORT=$(awk -F': *' '
+    /^[[:space:]]*mixed-port:/ {
+      gsub("\r","",$2)
+      print $2
+      exit
+    }' "$cfg")
+
+  # external-controller
+  local ctrl
+  ctrl=$(awk -F': *' '
+    /^[[:space:]]*external-controller:/ {
+      gsub("\r","",$2)
+      print $2
+      exit
+    }' "$cfg")
+
+  if [ -n "$ctrl" ]; then
+    ACTUAL_CTRL_PORT="${ctrl##*:}"
+  fi
 
   export ACTUAL_HTTP_PORT ACTUAL_CTRL_PORT
 }
-
 cmd_restart() {
   cmd_generate
   cmd_stop "${1:-false}" || true
@@ -671,10 +694,13 @@ cmd_status() {
   run_pid="$(read_state_value LAST_RUN_PID || true)"
   run_at="$(read_state_value LAST_RUN_AT || true)"
 
+  # 一律以 runtime/config.yaml 为准，避免显示旧端口
+  http_port="$(http_port_from_config || true)"
+  dashboard_port="$(port_from_controller || true)"
   controller="$(read_runtime_config_value "external-controller" || true)"
+
+  # dashboard_url 最好也建立在 runtime config 基础上
   dashboard_url="$(cmd_ui --raw 2>/dev/null || true)"
-  http_port="$(http_port_from_config)"
-  dashboard_port="$(port_from_controller)"
 
   if [ -n "$(read_runtime_config_value "secret" || true)" ]; then
     secret_exists="yes"
@@ -737,13 +763,13 @@ cmd_status() {
     echo "RunAt        : $run_at"
   fi
 
-  echo "ProxyPort    : $http_port"
-  echo "DashPort     : $dashboard_port"
+  echo "ProxyPort    : ${http_port:-unknown}"
+  echo "DashPort     : ${dashboard_port:-unknown}"
 
   if [ -n "${controller:-}" ]; then
     echo "Controller   : $controller"
   else
-    echo "Controller   : 127.0.0.1:9090 (fallback)"
+    echo "Controller   : unknown"
   fi
 
   if [ -n "${dashboard_url:-}" ]; then
