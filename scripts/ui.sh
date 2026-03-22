@@ -170,7 +170,6 @@ ui_summary_row() {
   first_avail=$((content_width - prefix_len))
   next_avail=$((content_width - prefix_len))
 
-  # 第一行
   if [ "${#rest}" -le "$first_avail" ]; then
     printf '%s %-*s %s\n' "$BOX_V" "$content_width" "${prefix}${rest}" "$BOX_V"
     return 0
@@ -180,7 +179,6 @@ ui_summary_row() {
   printf '%s %-*s %s\n' "$BOX_V" "$content_width" "${prefix}${chunk}" "$BOX_V"
   rest="${rest:$first_avail}"
 
-  # 后续续行
   while [ -n "$rest" ]; do
     if [ "${#rest}" -le "$next_avail" ]; then
       printf '%s %-*s %s\n' "$BOX_V" "$content_width" "$(printf '%*s%s' "$prefix_len" '' "$rest")" "$BOX_V"
