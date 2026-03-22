@@ -83,6 +83,9 @@ fi
 # =========================
 rm -f "$CLASHCTL_LINK" >/dev/null 2>&1 || true
 rm -f "$PROFILED_FILE" >/dev/null 2>&1 || true
+rm -f /usr/bin/clashctl >/dev/null 2>&1 || true
+rm -f /etc/profile.d/clash.sh >/dev/null 2>&1 || true
+rm -f /etc/profile.d/clashctl.sh >/dev/null 2>&1 || true
 
 ok "已清理命令入口及环境变量"
 
