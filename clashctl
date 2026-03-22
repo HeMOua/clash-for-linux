@@ -138,6 +138,123 @@ write_env_bool() {
   fi
 }
 
+trim_value() {
+  local s="${1:-}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+read_env_value() {
+  local key="$1"
+  local env_file="$PROJECT_DIR/.env"
+
+  [ -f "$env_file" ] || return 1
+
+  sed -nE "s/^[[:space:]]*(export[[:space:]]+)?${key}=['\"]?([^'\"]*)['\"]?.*$/\2/p" "$env_file" | head -n 1
+}
+
+write_env_value() {
+  local key="$1"
+  local value="$2"
+  local env_file="$PROJECT_DIR/.env"
+  local tmp_file
+
+  touch "$env_file"
+  tmp_file="$(mktemp)"
+
+  awk -v k="$key" -v v="$value" '
+    BEGIN { updated = 0 }
+    $0 ~ "^[[:space:]]*(export[[:space:]]+)?" k "=" {
+      print "export " k "='\''" v "'\''"
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print "export " k "='\''" v "'\''"
+      }
+    }
+  ' "$env_file" > "$tmp_file" && mv "$tmp_file" "$env_file"
+}
+
+is_valid_subscription_url() {
+  local url
+  url="$(trim_value "${1:-}")"
+
+  [ -n "$url" ] || return 1
+
+  case "$url" in
+    http://*|https://*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  [[ "$url" =~ [[:space:]] ]] && return 1
+  [[ "$url" == "-"* ]] && return 1
+
+  return 0
+}
+
+prompt_for_subscription_url() {
+  local current_url=""
+  local input_url=""
+
+  current_url="$(read_env_value "CLASH_URL" || true)"
+  current_url="$(trim_value "$current_url")"
+
+  ui_blank
+  ui_subheader "订阅配置"
+
+  if is_valid_subscription_url "$current_url"; then
+    printf "  当前订阅: %s\n" "$current_url"
+    printf "  直接回车可继续使用当前订阅\n"
+  else
+    printf "  当前未配置有效订阅，请输入订阅链接\n"
+  fi
+
+  while true; do
+    printf "  订阅链接: "
+    IFS= read -r input_url
+    input_url="$(trim_value "$input_url")"
+
+    if [ -z "$input_url" ]; then
+      if is_valid_subscription_url "$current_url"; then
+        input_url="$current_url"
+      else
+        ui_error "订阅链接不能为空"
+        continue
+      fi
+    fi
+
+    if ! is_valid_subscription_url "$input_url"; then
+      ui_error "订阅链接格式非法，必须以 http:// 或 https:// 开头"
+      continue
+    fi
+
+    write_env_value "CLASH_URL" "$input_url"
+    export CLASH_URL="$input_url"
+    ui_ok "订阅链接已保存"
+    return 0
+  done
+}
+
+ensure_subscription_url_ready() {
+  local current_url=""
+  current_url="$(read_env_value "CLASH_URL" || true)"
+  current_url="$(trim_value "$current_url")"
+
+  if is_valid_subscription_url "$current_url"; then
+    export CLASH_URL="$current_url"
+    return 0
+  fi
+
+  prompt_for_subscription_url
+}
+
 read_state_value() {
   local key="$1"
   [ -f "$STATE_FILE" ] || return 1
@@ -227,12 +344,18 @@ cmd_mode() {
   detect_mode
 }
 
-cmd_generate() {
-  if ! bash "$PROJECT_DIR/scripts/generate_config.sh"; then
-    err "配置生成失败"
+generate_config_once() {
+  ui_info "正在重新生成配置 ..."
+  if ! "$PROJECT_DIR/scripts/generate_config.sh"; then
+    ui_error "配置生成失败"
     return 1
   fi
-  ok "Config generated"
+  ui_ok "配置生成成功"
+}
+
+cmd_generate() {
+  ensure_subscription_url_ready || return 1
+  generate_config_once
 }
 
 cmd_start() {
@@ -750,26 +873,34 @@ cmd_sub() {
 
   case "$subcmd" in
     show)
-      if [ -f "$ENV_FILE" ]; then
-        local current_url
-        current_url="$(sed -nE "s/^[[:space:]]*(export[[:space:]]+)?CLASH_URL=['\"]?([^'\"]*)['\"]?$/\2/p" "$ENV_FILE" | head -n 1)"
-        if [ -n "${current_url:-}" ]; then
-          echo "[1] $current_url"
-        else
-          echo "未配置订阅"
-        fi
+      local current_url=""
+      current_url="$(read_env_value "CLASH_URL" || true)"
+
+      if is_valid_subscription_url "$current_url"; then
+        echo "[1] $current_url"
       else
-        err "未找到 .env"
-        exit 1
+        echo "未配置订阅"
       fi
       ;;
+
     update)
-      cmd_restart
+      ensure_subscription_url_ready || return 1
+
+      ui_info "正在停止 Clash ..."
+      cmd_stop || true
+
+      generate_config_once || return 1
+
+      ui_info "正在启动 Clash ..."
+      cmd_start || return 1
+
+      ui_ok "订阅已更新并应用"
       ;;
+
     *)
       err "未知 sub 子命令: $subcmd"
       echo "用法: clashctl sub [show|update]"
-      exit 1
+      return 1
       ;;
   esac
 }
