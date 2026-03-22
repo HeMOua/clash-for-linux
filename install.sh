@@ -148,7 +148,6 @@ EOF
 }
 
 show_dashboard_info() {
-
   local secret="$1"
   local public_ip="$2"
 
@@ -164,34 +163,34 @@ show_dashboard_info() {
   local public_ui=""
   local custom_ui="${CLASH_DASHBOARD_PUBLIC_URL:-}"
 
-  if [ -n "${lan_ip:-}" ]; then
-    lan_ui="http://${lan_ip}:${port}/ui"
-  fi
+  [ -n "$lan_ip" ] && lan_ui="http://${lan_ip}:${port}/ui"
+  [ -n "$public_ip" ] && public_ui="http://${public_ip}:${port}/ui"
 
-  if [ -n "${public_ip:-}" ]; then
-    public_ui="http://${public_ip}:${port}/ui"
-  fi
+  local inner_width=45
+
+  box_line() {
+    local text="$1"
+    local max_len=$((inner_width - 2))
+    text="${text:0:$max_len}"
+    printf "║ %-*s ║\n" "$max_len" "$text"
+  }
 
   echo "╔═══════════════════════════════════════════════╗"
-  echo "║                😼 Web 控制台                  ║"
+  box_line "😼 Web 控制台"
   echo "║═══════════════════════════════════════════════║"
-  echo "║                                               ║"
-  printf "║     🔓 注意放行端口：%-24s║\n" "$port"
+  box_line ""
+  box_line "🔓 注意放行端口：$port"
 
-  if [ -n "$lan_ui" ]; then
-    printf "║     🏠 内网：%-31s║\n" "$lan_ui"
-  fi
-  echo $public_ui
-  if [ -n "$public_ui" ] && [ "$host" = "0.0.0.0" ]; then
-    printf "║     🌏 公网：%-31s║\n" "$public_ui"
-  fi
+  [ -n "$lan_ui" ] && box_line "🏠 内网：$lan_ui"
+  [ -n "$local_ui" ] && box_line "💻 本机：$local_ui"
+  [ -n "$public_ui" ] && box_line "🌏 公网：$public_ui"
+  [ -n "$custom_ui" ] && box_line "☁️ 公共：$custom_ui"
 
-  if [ -n "$custom_ui" ]; then
-    printf "║     ☁️  公共：%-31s║\n" "$custom_ui"
+  if [ "$host" != "0.0.0.0" ]; then
+    box_line "⚠ 当前仅本机监听，公网可能无法访问"
   fi
 
-  printf "║     💻 本机：%-31s║\n" "$local_ui"
-  echo "║                                               ║"
+  box_line ""
   echo "╚═══════════════════════════════════════════════╝"
   echo
   echo "😼 当前密钥：$secret"
