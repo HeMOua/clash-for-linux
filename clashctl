@@ -362,11 +362,11 @@ cmd_start() {
   case "$mode" in
     systemd|systemd-installed)
       start_via_systemd
-      ok "已通过 systemd 启动 Clash"
+      ui_ok "已通过 systemd 启动 Clash"
       ;;
     script|none)
       start_via_script
-      ok "已通过脚本模式启动 Clash"
+      ui_ok "已通过脚本模式启动 Clash"
       ;;
     *)
       err "未知模式: $mode"
@@ -383,21 +383,21 @@ cmd_stop() {
   case "$mode" in
     systemd)
       if [ "$from_systemd" = "true" ]; then
-        ok "来自 systemd 的停止请求，已跳过重复停止操作"
+        ui_ok "来自 systemd 的停止请求，已跳过重复停止操作"
         return 0
       fi
       stop_via_systemd
-      ok "已通过 systemd 停止 Clash"
+      ui_ok "已通过 systemd 停止 Clash"
       ;;
     systemd-installed)
-      info "systemd 服务已安装但未运行"
+      ui_info "systemd 服务已安装但未运行"
       ;;
     script)
       stop_via_script
-      ok "已通过脚本模式停止 Clash"
+      ui_ok "已通过脚本模式停止 Clash"
       ;;
     none)
-      info "Clash 未运行"
+      ui_info "Clash 未运行"
       ;;
     *)
       err "未知模式: $mode"
@@ -549,9 +549,9 @@ cmd_update() {
     ui_info "等待服务就绪..."
     if wait_for_systemd_active; then
       if [ "$regen_result" -eq 2 ]; then
-        ok "代码已更新，当前继续使用旧配置运行"
+        ui_ok "代码已更新，当前继续使用旧配置运行"
       else
-        ok "更新完成"
+        ui_ok "更新完成"
       fi
       cmd_status
       return 0
@@ -567,10 +567,10 @@ cmd_update() {
     fi
 
     if [ "$regen_result" -eq 2 ]; then
-      ok "代码已更新，当前继续使用旧配置运行"
+      ui_ok "代码已更新，当前继续使用旧配置运行"
       show_update_result_summary
     else
-      ok "更新完成"
+      ui_ok "更新完成"
     fi
   fi
 }
@@ -651,9 +651,9 @@ cmd_update_force() {
   fi
 
   if [ "$regen_result" -eq 2 ]; then
-    ok "强制更新完成，当前继续使用旧配置运行"
+    ui_ok "强制更新完成，当前继续使用旧配置运行"
   else
-    ok "强制更新完成"
+    ui_ok "强制更新完成"
   fi
   cmd_status
 }
@@ -749,7 +749,7 @@ cmd_restart() {
   if has_systemd; then
     echo "[INFO] 正在等待服务启动完成 ..."
     if wait_for_systemd_active; then
-      ok "重启完成"
+      ui_ok "重启完成"
       return 0
     fi
 
@@ -758,7 +758,7 @@ cmd_restart() {
     return 1
   fi
 
-  ok "重启完成"
+  ui_ok "重启完成"
 }
 
 cmd_ui() {
@@ -916,11 +916,11 @@ cmd_tun() {
       ;;
     on)
       write_env_bool "CLASH_TUN" "true"
-      ok "已写入 CLASH_TUN=true"
+      ui_ok "已写入 CLASH_TUN=true"
       ;;
     off)
       write_env_bool "CLASH_TUN" "false"
-      ok "已写入 CLASH_TUN=false"
+      ui_ok "已写入 CLASH_TUN=false"
       ;;
     *)
       err "未知 tun 子命令: $subcmd"
@@ -944,11 +944,11 @@ cmd_mixin() {
       ;;
     on)
       write_env_bool "CLASH_MIXIN" "true"
-      ok "已写入 CLASH_MIXIN=true"
+      ui_ok "已写入 CLASH_MIXIN=true"
       ;;
     off)
       write_env_bool "CLASH_MIXIN" "false"
-      ok "已写入 CLASH_MIXIN=false"
+      ui_ok "已写入 CLASH_MIXIN=false"
       ;;
     *)
       err "未知 mixin 子命令: $subcmd"
