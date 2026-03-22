@@ -125,6 +125,38 @@ _ui_summary_inner_width() {
   echo $(( $(_ui_get_width) - 2 ))
 }
 
+_ui_display_width() {
+  python3 - "$1" <<'PY'
+import sys
+import unicodedata
+
+s = sys.argv[1]
+w = 0
+for ch in s:
+    if unicodedata.combining(ch):
+        continue
+    ea = unicodedata.east_asian_width(ch)
+    if ea in ("F", "W"):
+        w += 2
+    else:
+        w += 1
+print(w)
+PY
+}
+
+_ui_pad_right() {
+  local text="$1"
+  local width="$2"
+  local w pad
+
+  w="$(_ui_display_width "$text")"
+  pad=$((width - w))
+  [ "$pad" -lt 0 ] && pad=0
+
+  printf '%s' "$text"
+  printf '%*s' "$pad" ''
+}
+
 # ---------- helpers ----------
 ui_repeat() {
   local ch="$1"
@@ -231,60 +263,66 @@ _ui_wrap_print() {
 
 # ---------- summary box ----------
 ui_summary_begin() {
-  local title="${1:-摘要}"
-  local inner box_width
+    local title="${1:-摘要}"
+    local inner box_width
 
-  inner="$(_ui_summary_inner_width)"
-  box_width=$((inner - 2))
+    inner="$(_ui_summary_inner_width)"
+    box_width=$((inner - 2))
 
-  printf '%s' "$BOX_TL"
-  ui_repeat "$BOX_H" "$inner"
-  printf '%s\n' "$BOX_TR"
+    printf '%s' "$BOX_TL"
+    ui_repeat "$BOX_H" "$inner"
+    printf '%s\n' "$BOX_TR"
 
-  printf '%s %-*s %s\n' "$BOX_V" "$box_width" "$title" "$BOX_V"
+    printf '%s ' "$BOX_V"
+    _ui_pad_right "$title" "$box_width"
+    printf ' %s\n' "$BOX_V"
 
-  printf '%s' "$BOX_JL"
-  ui_repeat "$BOX_H" "$inner"
-  printf '%s\n' "$BOX_JR"
+    printf '%s' "$BOX_JL"
+    ui_repeat "$BOX_H" "$inner"
+    printf '%s\n' "$BOX_JR"
 }
 
 ui_summary_row() {
   local key="$1"
   local value="$2"
-  local inner content_width prefix prefix_len rest chunk avail
+  local inner content_width prefix prefix_width rest avail first_line line_prefix
 
   inner="$(_ui_summary_inner_width)"
   content_width=$((inner - 2))
 
   prefix=$(printf ' %-*s : ' "$UI_SUMMARY_KEY_WIDTH" "$key")
-  prefix_len=${#prefix}
+  prefix_width="$(_ui_display_width "$prefix")"
 
-  if [ "$prefix_len" -ge "$content_width" ]; then
+  if [ "$prefix_width" -ge "$content_width" ]; then
     prefix=" "
-    prefix_len=1
+    prefix_width=1
   fi
 
   rest="${value:-}"
-  avail=$((content_width - prefix_len))
+  avail=$((content_width - prefix_width))
   [ "$avail" -le 8 ] && avail=8
 
-  if [ "${#rest}" -le "$avail" ]; then
-    printf '%s %-*s %s\n' "$BOX_V" "$content_width" "${prefix}${rest}" "$BOX_V"
+  if [ -z "$rest" ]; then
+    printf '%s ' "$BOX_V"
+    _ui_pad_right "$prefix" "$content_width"
+    printf ' %s\n' "$BOX_V"
     return 0
   fi
 
-  chunk="${rest:0:$avail}"
-  printf '%s %-*s %s\n' "$BOX_V" "$content_width" "${prefix}${chunk}" "$BOX_V"
+  # 第一行
+  first_line="${rest:0:$avail}"
+  printf '%s ' "$BOX_V"
+  _ui_pad_right "${prefix}${first_line}" "$content_width"
+  printf ' %s\n' "$BOX_V"
   rest="${rest:$avail}"
 
+  # 后续换行
+  line_prefix="$(printf '%*s' "$prefix_width" '')"
   while [ -n "$rest" ]; do
-    if [ "${#rest}" -le "$avail" ]; then
-      printf '%s %-*s %s\n' "$BOX_V" "$content_width" "$(printf '%*s%s' "$prefix_len" '' "$rest")" "$BOX_V"
-      break
-    fi
-
-    chunk="${rest:0:$avail}"
-    printf '%s %-*s %s\n' "$BOX_V" "$content_width" "$(printf '%*s%s' "$prefix_len" '' "$chunk")" "$BOX_V"
+    local chunk="${rest:0:$avail}"
+    printf '%s ' "$BOX_V"
+    _ui_pad_right "${line_prefix}${chunk}" "$content_width"
+    printf ' %s\n' "$BOX_V"
     rest="${rest:$avail}"
   done
 }
