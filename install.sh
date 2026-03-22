@@ -36,7 +36,7 @@ ui_blank
 # ui_info "[2/5] 初始化目录"
 
 mkdir -p "$Install_Dir"
-ui_ok "安装目录已就绪: $Install_Dir"
+# ui_ok "安装目录已就绪: $Install_Dir"
 
 chmod +x "$Install_Dir"/clashctl 2>/dev/null || true
 chmod +x "$Install_Dir"/scripts/* 2>/dev/null || true
@@ -68,7 +68,7 @@ ui_ok ".env 配置已加载"
 # shellcheck disable=SC1090
 source "$Install_Dir/scripts/get_cpu_arch.sh"
 
-ui_ok "CPU 架构识别成功: ${CpuArch:-unknown}"
+# ui_ok "CPU 架构识别成功: ${CpuArch:-unknown}"
 
 # shellcheck disable=SC1090
 source "$Install_Dir/scripts/resolve_clash.sh"
@@ -400,17 +400,6 @@ fi
 
 ui_ok "[3/3] 启动服务..."
 
-# =========================
-# 输出 + 订阅录入
-# =========================
-ui_blank
-ui_summary_begin "安装信息"
-ui_summary_row "安装状态" "已完成"
-ui_summary_row "安装路径" "$Install_Dir"
-ui_summary_row "命令路径" "/usr/local/bin/clashctl"
-ui_summary_row "运行模式" "systemd"
-ui_summary_end
-
 prompt_and_apply_subscription
 
 echo
@@ -421,3 +410,14 @@ echo "  clashctl restart"
 echo "  clashctl stop"
 echo "  clashctl ui"
 echo "  clashctl secret"
+
+# =========================
+# 输出 + 订阅录入
+# =========================
+ui_blank
+ui_summary_begin "安装信息"
+ui_summary_row "安装状态" "已完成"
+ui_summary_row "安装路径" "$Install_Dir"
+ui_summary_row "命令路径" "/usr/local/bin/clashctl"
+ui_summary_row "运行模式" "systemd"
+ui_summary_end
