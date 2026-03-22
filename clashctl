@@ -808,7 +808,7 @@ cmd_ui() {
 
   ui_blank
   ui_summary_begin "😼 Clash Web 控制台"
-  ui_summary_row "🌏 推荐访问" "$recommended_ui"
+  ui_summary_row "🌏 公网" "$recommended_ui"
   [ -n "${lan_ui:-}" ] && ui_summary_row "💻 内网访问" "$lan_ui"
   [ -n "${custom_ui:-}" ] && ui_summary_row "🌐 公共访问" "$custom_ui"
   if [ -n "${secret:-}" ]; then
