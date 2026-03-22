@@ -259,78 +259,71 @@ _ui_wrap_print() {
 __ui_summary_title=""
 __ui_summary_rows=()
 
-_ui_summary_calc_width() {
-  local max_len=0
-  local line len
-  local title_line
-  local min_width=24
-  local max_width
-
-  title_line=" $__ui_summary_title "
-  max_len="$(_ui_display_width "$title_line")"
-
-  for line in "${__ui_summary_rows[@]}"; do
-    len="$(_ui_display_width "$line")"
-    [ "$len" -gt "$max_len" ] && max_len="$len"
-  done
-
-  [ "$max_len" -lt "$min_width" ] && max_len="$min_width"
-
-  # 仍然保留一个上限，避免超长内容把终端撑爆
-  max_width="$(_ui_summary_inner_width)"
-  [ "$max_len" -gt "$max_width" ] && max_len="$max_width"
-
-  printf '%s\n' "$max_len"
-}
-
 ui_summary_begin() {
   __ui_summary_title="${1:-摘要}"
   __ui_summary_rows=()
 }
 
-
 ui_summary_row() {
   local key="$1"
   local value="$2"
-  local line
 
   if [ -n "${value:-}" ]; then
-    line="${key} : ${value}"
+    __ui_summary_rows+=("${key} : ${value}")
   else
-    line="${key} :"
+    __ui_summary_rows+=("${key} :")
   fi
-
-  __ui_summary_rows+=("$line")
 }
 
 ui_summary_end() {
-  local inner
-  local line
-  local width
+  local max_len=0
+  local line len
+  local inner_width border_width
 
-  width="$(_ui_summary_calc_width)"
-  inner="$width"
+  # 标题长度（注意这里把左右空格也算进去）
+  len="$(_ui_display_width " $__ui_summary_title ")"
+  [ "$len" -gt "$max_len" ] && max_len="$len"
 
+  # 行内容长度（同样把左右空格算进去）
+  for line in "${__ui_summary_rows[@]}"; do
+    len="$(_ui_display_width " $line ")"
+    [ "$len" -gt "$max_len" ] && max_len="$len"
+  done
+
+  # 最小宽度，避免太窄
+  [ "$max_len" -lt 24 ] && max_len=24
+
+  # 不超过终端允许宽度
+  inner_width="$(_ui_summary_inner_width)"
+  [ "$max_len" -gt "$inner_width" ] && max_len="$inner_width"
+
+  border_width="$max_len"
+
+  # 顶部
   printf '%s' "$BOX_TL"
-  ui_repeat "$BOX_H" "$inner"
+  ui_repeat "$BOX_H" "$border_width"
   printf '%s\n' "$BOX_TR"
 
+  # 标题
   printf '%s' "$BOX_V"
-  _ui_pad_right " $__ui_summary_title " "$inner"
+  _ui_pad_right " $__ui_summary_title " "$border_width"
   printf '%s\n' "$BOX_V"
 
+  # 分隔线
   printf '%s' "$BOX_JL"
-  ui_repeat "$BOX_H" "$inner"
+  ui_repeat "$BOX_H" "$border_width"
   printf '%s\n' "$BOX_JR"
 
+  # 内容
   for line in "${__ui_summary_rows[@]}"; do
     printf '%s' "$BOX_V"
-    _ui_pad_right " $line " "$inner"
+    _ui_pad_right " $line " "$border_width"
     printf '%s\n' "$BOX_V"
   done
 
+  # 底部
   printf '%s' "$BOX_BL"
-  ui_repeat "$BOX_H" "$inner"
+  ui_repeat "$BOX_H" "$border_width"
   printf '%s\n' "$BOX_BR"
 }
 
