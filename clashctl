@@ -768,6 +768,10 @@ cmd_restart() {
   ui_ok "重启完成"
 }
 
+get_lan_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
 cmd_ui() {
   local raw="${1:-}"
   local controller host port secret
