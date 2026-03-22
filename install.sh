@@ -32,7 +32,7 @@ fi
 # =========================
 # 同步文件
 # =========================
-ui_blank
+# ui_blank
 # ui_info "[2/5] 初始化目录"
 
 mkdir -p "$Install_Dir"
@@ -58,12 +58,12 @@ mkdir -p \
 # 加载 env
 # =========================
 # shellcheck disable=SC1090
-ui_blank
+# ui_blank
 ui_ok "[2/3] 生成配置..."
 
 source "$Install_Dir/.env"
 
-ui_ok ".env 配置已加载"
+# ui_ok ".env 配置已加载"
 
 # shellcheck disable=SC1090
 source "$Install_Dir/scripts/get_cpu_arch.sh"
@@ -73,7 +73,7 @@ source "$Install_Dir/scripts/get_cpu_arch.sh"
 # shellcheck disable=SC1090
 source "$Install_Dir/scripts/resolve_clash.sh"
 
-ui_blank
+# ui_blank
 # ui_info "准备内核"
 
 if ! bash "$Install_Dir/scripts/resolve_clash.sh"; then
@@ -260,30 +260,21 @@ if [ -n "$OLD_CLASHCTL_REAL" ] && [ "$OLD_CLASHCTL_REAL" != "$(readlink -f "$Ins
   ui_info "将覆盖为当前版本: $Install_Dir/clashctl"
 fi
 
-cleanup_all_clashctl() {
-  local current
-  current="$(readlink -f "$Install_Dir/clashctl" 2>/dev/null || true)"
+cleanup_legacy_clashctl() {
+  rm -f /usr/local/bin/clashctl 2>/dev/null || true
+  rm -f /usr/bin/clashctl 2>/dev/null || true
 
-  # 查找系统中所有 clashctl
-  mapfile -t found < <(command -v -a clashctl 2>/dev/null | sort -u)
+  [ -f /root/clashctl ] && rm -f /root/clashctl 2>/dev/null || true
+  [ -f "$HOME/clashctl" ] && rm -f "$HOME/clashctl" 2>/dev/null || true
 
-  for f in "${found[@]}"; do
-    real="$(readlink -f "$f" 2>/dev/null || true)"
-
-    if [ "$real" != "$current" ]; then
-      rm -f "$f" 2>/dev/null || true
-    fi
-  done
-
-  # 额外扫 root/home（补盲区）
-  for f in /root/clashctl "$HOME/clashctl"; do
-    if [ -f "$f" ]; then
-      rm -f "$f"
-    fi
-  done
+  [ -d /root/clashctl ] && rm -rf /root/clashctl 2>/dev/null || true
+  [ -d "$HOME/clashctl" ] && rm -rf "$HOME/clashctl" 2>/dev/null || true
 }
 
-cleanup_all_clashctl
+cleanup_legacy_clashctl
+
+chmod +x "$Install_Dir/clashctl"
+ln -sfn "$Install_Dir/clashctl" /usr/local/bin/clashctl
 
 # ===== 安装/覆盖 clashctl 命令 =====
 
@@ -400,8 +391,6 @@ fi
 
 ui_ok "[3/3] 启动服务..."
 
-prompt_and_apply_subscription
-
 echo
 echo "命令:"
 echo "  clashctl status"
@@ -411,9 +400,6 @@ echo "  clashctl stop"
 echo "  clashctl ui"
 echo "  clashctl secret"
 
-# =========================
-# 输出 + 订阅录入
-# =========================
 ui_blank
 ui_summary_begin "安装信息"
 ui_summary_row "安装状态" "已完成"
@@ -421,3 +407,9 @@ ui_summary_row "安装路径" "$Install_Dir"
 ui_summary_row "命令路径" "/usr/local/bin/clashctl"
 ui_summary_row "运行模式" "systemd"
 ui_summary_end
+
+# =========================
+# 输出 + 订阅录入
+# =========================
+prompt_and_apply_subscription
+
