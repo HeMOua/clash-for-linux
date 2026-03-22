@@ -809,9 +809,13 @@ cmd_status() {
   ui_summary_row "代理端口" "$http_port"
   ui_summary_row "面板端口" "$dashboard_port"
   ui_summary_row "控制地址" "$controller"
-  ui_summary_row "面板地址" "$dashboard_url"
+  # ui_summary_row "面板地址" "$dashboard_url"
   ui_summary_row "密钥状态" "$secret_status"
   ui_summary_end
+
+  ui_blank
+  ui_subheader "面板地址"
+  printf '  %s\n' "$dashboard_url"
 }
 
 doctor_ok() {
