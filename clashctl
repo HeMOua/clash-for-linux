@@ -839,7 +839,7 @@ cmd_status() {
   local dashboard_url="-"
   local http_port="-"
   local dashboard_port="-"
-  local secret_status="未配置"
+  local secret_display="未配置"
   local config_exists="否"
   local state_exists="否"
 
@@ -861,6 +861,9 @@ cmd_status() {
       running="运行中"
       service_active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
       service_enabled="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+      pid="$(systemctl show -p MainPID --value "$SERVICE_NAME" 2>/dev/null || true)"
+      [ -z "${pid:-}" ] && pid="-"
+      [ "$pid" = "0" ] && pid="-"
       ;;
     systemd-installed)
       service_type="systemd"
@@ -884,23 +887,25 @@ cmd_status() {
   [ -f "$RUNTIME_CONFIG" ] && config_exists="是"
   [ -f "$STATE_FILE" ] && state_exists="是"
 
-  generate_status="$(read_state_value LAST_GENERATE_STATUS || echo "-")"
-  generate_reason="$(read_state_value LAST_GENERATE_REASON || echo "-")"
-  config_source="$(read_state_value LAST_CONFIG_SOURCE || echo "-")"
-  generate_at="$(read_state_value LAST_GENERATE_AT || echo "-")"
+  gen_status="$(read_state_value LAST_GENERATE_STATUS || true)"
+  gen_reason="$(read_state_value LAST_GENERATE_REASON || true)"
+  cfg_source="$(read_state_value LAST_CONFIG_SOURCE || true)"
+  gen_time="$(read_state_value LAST_GENERATE_AT || true)"
 
-  run_status="$(read_state_value LAST_RUN_STATUS || echo "-")"
-  run_mode="$(read_state_value LAST_RUN_MODE || echo "-")"
-  run_pid="$(read_state_value LAST_RUN_PID || echo "-")"
-  run_at="$(read_state_value LAST_RUN_AT || echo "-")"
+  run_result="$(read_state_value LAST_RUN_STATUS || true)"
+  run_mode="$(read_state_value LAST_RUN_MODE || true)"
+  run_pid="$(read_state_value LAST_RUN_PID || true)"
+  start_time="$(read_state_value LAST_RUN_AT || true)"
 
   http_port="$(http_port_from_config || echo "-")"
   dashboard_port="$(port_from_controller || echo "-")"
   controller="$(read_runtime_config_value "external-controller" || echo "-")"
   dashboard_url="$(cmd_ui --raw 2>/dev/null || echo "-")"
 
-  if [ -n "$(read_runtime_config_value "secret" || true)" ]; then
-    secret_status="已配置"
+  local secret_value=""
+  secret_value="$(read_runtime_config_value "secret" || true)"
+  if [ -n "${secret_value:-}" ]; then
+    secret_display="$secret_value"
   fi
 
   ui_header "clashctl 状态"
@@ -941,8 +946,8 @@ cmd_status() {
   ui_summary_row "代理端口" "$http_port"
   ui_summary_row "面板端口" "$dashboard_port"
   ui_summary_row "控制地址" "$controller"
-  # ui_summary_row "面板地址" "$dashboard_url"
-  ui_summary_row "密钥状态" "$secret_status"
+  ui_summary_row "面板地址" "$dashboard_url"
+  ui_summary_row "密钥配置" "$secret_display"
   ui_summary_end
 
   ui_blank
