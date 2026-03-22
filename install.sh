@@ -114,6 +114,10 @@ get_public_ip() {
     || true
 }
 
+get_lan_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
 show_install_usage() {
   cat <<'EOF'
 
@@ -287,14 +291,13 @@ if [ -n "$OLD_CLASHCTL_PATH" ]; then
   OLD_CLASHCTL_REAL="$(readlink -f "$OLD_CLASHCTL_PATH" 2>/dev/null || true)"
 fi
 
-chmod +x "$Install_Dir/clashctl"
-
 # 如果存在旧版本，打印提示
 if [ -n "$OLD_CLASHCTL_REAL" ] && [ "$OLD_CLASHCTL_REAL" != "$(readlink -f "$Install_Dir/clashctl")" ]; then
   ui_warn "检测到旧版本 clashctl: $OLD_CLASHCTL_REAL"
   ui_info "将覆盖为当前版本: $Install_Dir/clashctl"
 fi
 
+# 强制清理旧入口
 cleanup_legacy_clashctl() {
   rm -f /usr/local/bin/clashctl 2>/dev/null || true
   rm -f /usr/bin/clashctl 2>/dev/null || true
@@ -306,20 +309,9 @@ cleanup_legacy_clashctl() {
   [ -d "$HOME/clashctl" ] && rm -rf "$HOME/clashctl" 2>/dev/null || true
 }
 
-cleanup_legacy_clashctl
-
-chmod +x "$Install_Dir/clashctl"
-ln -sfn "$Install_Dir/clashctl" /usr/local/bin/clashctl
-
 # ===== 安装/覆盖 clashctl 命令 =====
-
+cleanup_legacy_clashctl
 chmod +x "$Install_Dir/clashctl"
-
-# 强制清理旧入口
-rm -f /usr/local/bin/clashctl 2>/dev/null || true
-rm -f /usr/bin/clashctl 2>/dev/null || true
-
-# 建立新入口
 ln -s "$Install_Dir/clashctl" /usr/local/bin/clashctl
 
 # 清理当前 shell 污染（关键）
@@ -349,9 +341,6 @@ if [ "$NEW_CLASHCTL_REAL" != "$EXPECTED_CLASHCTL_REAL" ]; then
 fi
 
 # ui_ok "clashctl 已更新: /usr/local/bin/clashctl → $EXPECTED_CLASHCTL_REAL"
-
-chmod +x "$Install_Dir/clashctl"
-
 # ui_ok "clashctl: /usr/local/bin/clashctl"
 
 # =========================
@@ -426,12 +415,14 @@ fi
 
 ui_ok "[3/3] 启动服务..."
 
-secret="$(read_env_value "CLASH_SECRET")"
-public_ip="$(get_public_ip)"
-echo
-show_dashboard_info "$secret" "$public_ip"
 # =========================
 # 输出 + 订阅录入
 # =========================
 prompt_and_apply_subscription
+
+secret="$(read_env_value "CLASH_SECRET")"
+public_ip="$(get_public_ip)"
+echo
+show_dashboard_info "$secret" "$public_ip"
+
 
