@@ -85,6 +85,10 @@ fi
 # =========================
 # 删除命令入口
 # =========================
+# 清理当前 shell 代理（如果存在）
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+unset all_proxy ALL_PROXY no_proxy NO_PROXY
+
 rm -f "$CLASHCTL_LINK" >/dev/null 2>&1 || true
 rm -f "$PROFILED_FILE" >/dev/null 2>&1 || true
 rm -f /usr/bin/clashctl >/dev/null 2>&1 || true
@@ -105,8 +109,16 @@ if [ "$PURGE" = true ]; then
   fi
 else
   warn "安装目录已保留: $INSTALL_DIR"
-  echo "如需彻底删除，请执行：bash uninstall.sh --purge"
+  echo "如需删除，请执行：bash uninstall.sh --purge"
 fi
+
+# =========================
+# 提示：当前终端代理变量需要手动清
+# =========================
+echo
+warn "如果你曾执行 proxy_on，当前终端可能仍保留代理环境变量。可执行："
+echo "  unset http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY"
+echo "  # 或关闭终端重新打开"
 
 echo
 ok "卸载完成"
