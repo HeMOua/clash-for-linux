@@ -2163,7 +2163,7 @@ install_clashctl_entry() {
   cat > "$bin_target" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec "$PROJECT_DIR/scripts/core/clashctl.sh" "\$@"
+exec bash "$PROJECT_DIR/scripts/core/clashctl.sh" "\$@"
 EOF
   chmod +x "$bin_target"
 
