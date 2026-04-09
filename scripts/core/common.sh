@@ -300,6 +300,7 @@ cleanup_env_legacy_compat_fields() {
 
   awk '
     $0 ~ /^[[:space:]]*(export[[:space:]]+)?BUILD_MIN_SUCCESS_SOURCES=/ { next }
+    $0 ~ /^[[:space:]]*(export[[:space:]]+)?CLASH_SUBSCRIPTION_FORMAT=/ { next }
     $0 ~ /^[[:space:]]*(export[[:space:]]+)?EXTERNAL_CONTROLLER="?127\.0\.0\.1:9090"?$/ {
       print "export EXTERNAL_CONTROLLER=\"0.0.0.0:9090\""
       next
