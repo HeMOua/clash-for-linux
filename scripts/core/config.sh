@@ -60,18 +60,39 @@ subscriptions_file() {
   echo "$CONFIG_DIR/subscriptions.yaml"
 }
 
+migrate_subscriptions_legacy_fields() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+
+  if [ -x "$(yq_bin 2>/dev/null || true)" ]; then
+    if "$(yq_bin)" eval '(.mode != null) or (.selected != null) or (.policy != null)' "$file" 2>/dev/null | grep -qx 'true'; then
+      "$(yq_bin)" eval -i 'del(.mode) | del(.selected) | del(.policy)' "$file" 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  # 无 yq 时做最小兜底：仅移除顶层旧字段，避免旧语义继续扩散
+  awk '
+    $0 ~ /^[[:space:]]*mode:[[:space:]]*/ { next }
+    $0 ~ /^[[:space:]]*selected:[[:space:]]*/ { next }
+    $0 ~ /^[[:space:]]*policy:[[:space:]]*/ { next }
+    { print }
+  ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
 ensure_subscriptions_file() {
   local file
   file="$(subscriptions_file)"
 
-  [ -f "$file" ] && return 0
+  if [ -f "$file" ]; then
+    migrate_subscriptions_legacy_fields "$file"
+    return 0
+  fi
 
   mkdir -p "$CONFIG_DIR"
 
   cat > "$file" <<'EOF'
-mode: single
 active: default
-selected: []
 
 sources:
   default:
@@ -79,10 +100,8 @@ sources:
     url: ""
     enabled: true
 EOF
-}
 
-build_min_success_sources() {
-  echo "1"
+  migrate_subscriptions_legacy_fields "$file"
 }
 
 csv_count() {
@@ -490,19 +509,15 @@ record_build_failure() {
   local selected="$4"
   local included="$5"
   local failed="$6"
-  local min_required
 
-  min_required="$(build_min_success_sources)"
-
-  write_build_value "BUILD_MODE" "$mode"
-  write_build_value "BUILD_POLICY" "$policy"
+  # active-only 元数据：只记录当前实际参与编译的 active 订阅集合
+  # 为避免旧状态文件混淆，同时清空旧 key
   write_build_value "BUILD_ACTIVE_SOURCE" "$active"
-  write_build_value "BUILD_SELECTED_SOURCES" "$selected"
-  write_build_value "BUILD_INCLUDED_SOURCES" "$included"
-  write_build_value "BUILD_FAILED_SOURCES" "$failed"
-  write_build_value "BUILD_SOURCE_COUNT" "$(csv_count "$selected")"
-  write_build_value "BUILD_INCLUDED_COUNT" "$(csv_count "$included")"
-  write_build_value "BUILD_MIN_SUCCESS_SOURCES" "$min_required"
+  write_build_value "BUILD_ACTIVE_SOURCES" "$included"
+  write_build_value "BUILD_FAILED_ACTIVE_SOURCES" "$failed"
+  write_build_value "BUILD_SELECTED_SOURCES" ""
+  write_build_value "BUILD_INCLUDED_SOURCES" ""
+  write_build_value "BUILD_FAILED_SOURCES" ""
   write_build_value "BUILD_LAST_STATUS" "failed"
   write_build_value "BUILD_LAST_TIME" "$(now_datetime)"
 }
@@ -514,19 +529,13 @@ record_build_success() {
   local selected="$4"
   local included="$5"
   local failed="$6"
-  local min_required
 
-  min_required="$(build_min_success_sources)"
-
-  write_build_value "BUILD_MODE" "$mode"
-  write_build_value "BUILD_POLICY" "$policy"
   write_build_value "BUILD_ACTIVE_SOURCE" "$active"
-  write_build_value "BUILD_SELECTED_SOURCES" "$selected"
-  write_build_value "BUILD_INCLUDED_SOURCES" "$included"
-  write_build_value "BUILD_FAILED_SOURCES" "$failed"
-  write_build_value "BUILD_SOURCE_COUNT" "$(csv_count "$selected")"
-  write_build_value "BUILD_INCLUDED_COUNT" "$(csv_count "$included")"
-  write_build_value "BUILD_MIN_SUCCESS_SOURCES" "$min_required"
+  write_build_value "BUILD_ACTIVE_SOURCES" "$included"
+  write_build_value "BUILD_FAILED_ACTIVE_SOURCES" "$failed"
+  write_build_value "BUILD_SELECTED_SOURCES" ""
+  write_build_value "BUILD_INCLUDED_SOURCES" ""
+  write_build_value "BUILD_FAILED_SOURCES" ""
   write_build_value "BUILD_LAST_STATUS" "success"
   write_build_value "BUILD_LAST_TIME" "$(now_datetime)"
   clear_build_error_detail
@@ -937,7 +946,7 @@ print_build_explain() {
   error_detail="$(status_build_last_error_detail 2>/dev/null || true)"
 
   ui_title "🧩 编译说明"
-  echo "- 当前编译链只处理 active 主订阅，不再 merge 多订阅"
+  echo "- 当前编译链只处理 active 主订阅"
   echo "- 当前主订阅：${active:-未设置}"
 
   case "${last_status:-unknown}" in
@@ -962,16 +971,30 @@ print_build_explain() {
   ui_blank
 }
 
-build_selected_sources_csv() {
-  read_build_value "BUILD_SELECTED_SOURCES" 2>/dev/null || true
+build_active_sources_csv() {
+  local value
+  value="$(read_build_value "BUILD_ACTIVE_SOURCES" 2>/dev/null || true)"
+  if [ -n "${value:-}" ]; then
+    echo "$value"
+    return 0
+  fi
+
+  # 兼容历史 build.env
+  value="$(read_build_value "BUILD_INCLUDED_SOURCES" 2>/dev/null || true)"
+  [ -n "${value:-}" ] && echo "$value"
 }
 
-build_included_sources_csv() {
-  read_build_value "BUILD_INCLUDED_SOURCES" 2>/dev/null || true
-}
+build_failed_active_sources_csv() {
+  local value
+  value="$(read_build_value "BUILD_FAILED_ACTIVE_SOURCES" 2>/dev/null || true)"
+  if [ -n "${value:-}" ]; then
+    echo "$value"
+    return 0
+  fi
 
-build_failed_sources_csv() {
-  read_build_value "BUILD_FAILED_SOURCES" 2>/dev/null || true
+  # 兼容历史 build.env
+  value="$(read_build_value "BUILD_FAILED_SOURCES" 2>/dev/null || true)"
+  [ -n "${value:-}" ] && echo "$value"
 }
 
 build_last_status() {
@@ -995,66 +1018,36 @@ build_last_error_detail() {
 }
 
 build_success_explanation_lines() {
-  local mode policy included_csv failed_csv included_count min_required
+  local included_csv included_count
 
-  mode="$(subscription_mode 2>/dev/null || true)"
-  policy="$(subscription_policy 2>/dev/null || true)"
-  included_csv="$(build_included_sources_csv)"
-  failed_csv="$(build_failed_sources_csv)"
+  included_csv="$(build_active_sources_csv)"
   included_count="$(csv_count "$included_csv")"
-  min_required="$(build_min_success_sources)"
 
-  case "$mode" in
-    single)
-      echo "- single 模式下仅当前主订阅参与编译"
-      ;;
-  esac
-
-  echo "- 实际成功源数量 ${included_count}，达到最少成功源要求 ${min_required}"
+  echo "- active-only 编译链仅处理当前主订阅"
+  echo "- 当前成功源数量：${included_count}"
 }
 
 build_failure_explanation_lines() {
-  local mode policy included_csv failed_csv included_count min_required error_stage
+  local included_csv included_count error_stage
 
-  mode="$(subscription_mode 2>/dev/null || true)"
-  policy="$(subscription_policy 2>/dev/null || true)"
-  included_csv="$(build_included_sources_csv)"
-  failed_csv="$(build_failed_sources_csv)"
+  included_csv="$(build_active_sources_csv)"
+  failed_csv="$(build_failed_active_sources_csv)"
   included_count="$(csv_count "$included_csv")"
-  min_required="$(build_min_success_sources)"
   error_stage="$(build_last_error_stage)"
 
-  case "$mode" in
-    single)
-      echo "- single 模式下仅当前主订阅参与编译"
-      ;;
-    merge)
-      echo "- merge 模式下 selected 集合参与编译"
-      ;;
-  esac
-
-  case "$policy" in
-    strict)
-      if [ -n "${failed_csv:-}" ]; then
-        echo "- strict 策略下任一订阅失败都会导致整体失败"
-      fi
-      ;;
-    tolerant)
-      if [ "$error_stage" = "min-success-threshold" ]; then
-        echo "- tolerant 虽允许跳过失败源，但仍必须满足最少成功源要求"
-      elif [ -n "${failed_csv:-}" ]; then
-        echo "- tolerant 已跳过失败源，但后续校验仍未通过"
-      fi
-      ;;
-  esac
-
-  echo "- 实际成功源数量 ${included_count}，最少成功源要求 ${min_required}"
+  echo "- active-only 编译链仅处理当前主订阅"
+  if [ "$error_stage" = "resolve-active-source" ]; then
+    echo "- 当前未找到可用的 active 主订阅"
+  elif [ -n "${failed_csv:-}" ]; then
+    echo "- 当前 active 主订阅拉取或校验失败"
+  fi
+  echo "- 当前成功源数量：${included_count}"
 }
 
 print_build_failed_source_lines() {
   local failed_csv name last_error
 
-  failed_csv="$(build_failed_sources_csv)"
+  failed_csv="$(build_failed_active_sources_csv)"
   [ -n "${failed_csv:-}" ] || return 0
 
   IFS=',' read -r -a _failed_names <<< "$failed_csv"
@@ -1073,7 +1066,7 @@ build_explain_next_steps() {
   local last_status failed_csv
 
   last_status="$(build_last_status)"
-  failed_csv="$(build_failed_sources_csv)"
+  failed_csv="$(build_failed_active_sources_csv)"
 
   if [ "${last_status:-}" = "success" ]; then
     echo "👉 clashctl health"
@@ -1083,10 +1076,6 @@ build_explain_next_steps() {
 
   if [ -n "${failed_csv:-}" ]; then
     echo "👉 clashctl health"
-  fi
-
-  if [ "$(subscription_mode 2>/dev/null || true)" = "merge" ]; then
-    echo "👉 clashctl config select list"
   fi
 
   echo "👉 clashctl doctor"
@@ -1287,38 +1276,6 @@ subscription_format_by_name() {
   ensure_subscriptions_file
 
   "$(yq_bin)" eval ".sources.${name}.type // \"clash\"" "$file" 2>/dev/null | head -n 1
-}
-
-merge_subscription_sources() {
-  local base_file="$1"
-  local sub_file="$2"
-  local out_file="$3"
-  local tmp_file
-
-  [ -s "$base_file" ] || die "基础配置不存在：$base_file"
-  [ -s "$sub_file" ] || die "订阅配置不存在：$sub_file"
-
-  tmp_file="$(mktemp)"
-  cp -f "$base_file" "$tmp_file"
-
-  BASE_FILE="$base_file" \
-  SUB_FILE="$sub_file" \
-  "$(yq_bin)" eval -i '
-    .proxies = (load(strenv(SUB_FILE)).proxies // []) |
-    .["proxy-groups"] = (load(strenv(SUB_FILE)).["proxy-groups"] // (.["proxy-groups"] // [])) |
-    .["rule-providers"] = ((.["rule-providers"] // {}) * (load(strenv(SUB_FILE)).["rule-providers"] // {})) |
-    .rules = (load(strenv(SUB_FILE)).rules // (.rules // []))
-  ' "$tmp_file" || {
-    rm -f "$tmp_file" 2>/dev/null || true
-    die "合并订阅配置失败"
-  }
-
-  [ -s "$tmp_file" ] || {
-    rm -f "$tmp_file" 2>/dev/null || true
-    die "合并订阅配置失败：输出为空"
-  }
-
-  mv -f "$tmp_file" "$out_file"
 }
 
 is_valid_port_number() {
@@ -1817,8 +1774,7 @@ remove_subscription() {
   active="$(active_subscription_name)"
 
   NAME="$name" "$(yq_bin)" eval -i '
-    del(.sources[env(NAME)]) |
-    .selected = ((.selected // []) | map(select(. != env(NAME))))
+    del(.sources[env(NAME)])
   ' "$file"
 
   if [ "$active" = "$name" ]; then
@@ -1861,7 +1817,6 @@ rename_subscription() {
   OLD_NAME="$old_name" NEW_NAME="$new_name" "$(yq_bin)" eval -i '
     .sources[env(NEW_NAME)] = .sources[env(OLD_NAME)] |
     del(.sources[env(OLD_NAME)]) |
-    .selected = ((.selected // []) | map(if . == env(OLD_NAME) then env(NEW_NAME) else . end)) |
     .active = (if .active == env(OLD_NAME) then env(NEW_NAME) else .active end)
   ' "$file"
 
@@ -2356,11 +2311,10 @@ list_subscriptions_verbose() {
 }
 
 subscription_list_overview_lines() {
-  local active recommended mode
+  local active recommended
 
   active="$(active_subscription_name 2>/dev/null || true)"
   recommended="$(recommended_subscription_name 2>/dev/null || true)"
-  mode="$(subscription_mode 2>/dev/null || true)"
 
   if [ -n "${active:-}" ]; then
     echo "📡 当前主订阅：$active"
@@ -2376,17 +2330,14 @@ subscription_list_overview_lines() {
     echo "💡 推荐订阅：暂无"
   fi
 
-  if [ -n "${mode:-}" ]; then
-    echo "🧩 当前模式：$mode"
-  fi
+  echo "🧩 编译模式：active-only"
 }
 
 subscription_list_recommendation_lines() {
-  local active recommended mode
+  local active recommended
 
   active="$(active_subscription_name 2>/dev/null || true)"
   recommended="$(recommended_subscription_name 2>/dev/null || true)"
-  mode="$(subscription_mode 2>/dev/null || true)"
 
   if [ -n "${active:-}" ] && ! active_subscription_enabled 2>/dev/null; then
     echo "👉 clashctl use"
@@ -2398,13 +2349,6 @@ subscription_list_recommendation_lines() {
   if [ -n "${recommended:-}" ] && [ "${recommended:-}" != "${active:-}" ]; then
     echo "👉 clashctl use ${recommended}"
     echo "👉 clashctl health ${recommended}"
-    echo "👉 clashctl ls --verbose"
-    return 0
-  fi
-
-  if [ "${mode:-}" = "merge" ]; then
-    echo "👉 clashctl config show"
-    echo "👉 clashctl health"
     echo "👉 clashctl ls --verbose"
     return 0
   fi
@@ -2963,14 +2907,6 @@ profile_set_value() {
 }
 
 # ===== FINAL OVERRIDE: active-only runtime pipeline =====
-
-subscription_mode() {
-  echo "single"
-}
-
-subscription_policy() {
-  echo "active-only"
-}
 
 resolve_build_sources() {
   local active

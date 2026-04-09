@@ -136,7 +136,7 @@ install_arch_text() {
 }
 
 install_state_text() {
-  local has_subscription install_ready runtime_ready controller_ready
+  local has_subscription install_ready runtime_ready controller_ready build_status
 
   if install_has_subscription; then
     has_subscription="true"
@@ -147,35 +147,43 @@ install_state_text() {
   install_ready="$(read_runtime_event_value "RUNTIME_LAST_INSTALL_READY" 2>/dev/null || true)"
   runtime_ready="$(install_verify_runtime_ready 2>/dev/null || true)"
   controller_ready="$(install_verify_controller_ready 2>/dev/null || true)"
-
-  if [ "${install_ready:-false}" = "true" ]; then
-    echo "ready"
-    return 0
-  fi
+  build_status="$(read_build_value "BUILD_LAST_STATUS" 2>/dev/null || true)"
 
   if [ "${has_subscription:-false}" != "true" ]; then
     echo "stopped"
     return 0
   fi
 
-  if [ "${runtime_ready:-false}" = "true" ] || [ "${controller_ready:-false}" = "true" ]; then
-    echo "degraded"
+  if [ "${build_status:-}" = "failed" ]; then
+    echo "broken"
     return 0
   fi
 
-  echo "degraded"
+  if [ "${install_ready:-false}" = "true" ] \
+    || { [ "${runtime_ready:-false}" = "true" ] && [ "${controller_ready:-false}" = "true" ]; }; then
+    echo "ready"
+    return 0
+  fi
+
+  echo "verifying"
 }
 
 install_build_result_text() {
-  local command_ready config_ready
+  local command_ready config_ready build_status
 
   command_ready="$(install_verify_command_ready 2>/dev/null || true)"
   config_ready="$(install_verify_config_ready 2>/dev/null || true)"
+  build_status="$(read_build_value "BUILD_LAST_STATUS" 2>/dev/null || true)"
 
-  if [ "${command_ready:-false}" = "true" ] && [ "${config_ready:-false}" = "true" ]; then
+  if [ "${build_status:-}" = "failed" ]; then
+    echo "failed"
+    return 0
+  fi
+
+  if [ "${command_ready:-false}" = "true" ] && { [ "${config_ready:-false}" = "true" ] || ! install_has_subscription; }; then
     echo "success"
   else
-    echo "failed"
+    echo "pending"
   fi
 }
 
@@ -184,7 +192,14 @@ install_next_step_text() {
     ready)
       echo "clashctl select"
       ;;
-    degraded)
+    verifying)
+      if install_has_subscription; then
+        echo "clashon"
+      else
+        echo "clashctl add <订阅链接>"
+      fi
+      ;;
+    broken)
       echo "clashctl doctor"
       ;;
     stopped)
@@ -219,6 +234,9 @@ init_project_context() {
 }
 
 load_env_if_exists() {
+  local env_file
+  env_file="$PROJECT_DIR/.env"
+
   if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     # shellcheck disable=SC1090
@@ -227,6 +245,7 @@ load_env_if_exists() {
   fi
 
   normalize_env_compat
+  cleanup_env_legacy_compat_fields "$env_file"
 }
 
 normalize_env_compat() {
@@ -262,7 +281,22 @@ normalize_env_compat() {
     CLASH_SUBSCRIPTION_UA="$CLASH_SUB_UA"
   fi
 
+  # 已废弃：active-only 主链不再消费该字段
+  unset BUILD_MIN_SUCCESS_SOURCES 2>/dev/null || true
+
   return 0
+}
+
+cleanup_env_legacy_compat_fields() {
+  local file="$1"
+
+  [ -n "${file:-}" ] || return 0
+  [ -f "$file" ] || return 0
+
+  awk '
+    $0 ~ /^[[:space:]]*(export[[:space:]]+)?BUILD_MIN_SUCCESS_SOURCES=/ { next }
+    { print }
+  ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
 github_proxy_prefix() {
@@ -2175,7 +2209,7 @@ remove_alias_command_wrappers() {
 }
 
 install_status_text() {
-  local has_subscription install_ready runtime_ready controller_ready
+  local has_subscription install_ready runtime_ready controller_ready build_status
   local live_runtime="false"
   local live_controller="false"
 
@@ -2188,6 +2222,7 @@ install_status_text() {
   install_ready="$(read_runtime_event_value "RUNTIME_LAST_INSTALL_READY" 2>/dev/null || true)"
   runtime_ready="$(install_verify_runtime_ready 2>/dev/null || true)"
   controller_ready="$(install_verify_controller_ready 2>/dev/null || true)"
+  build_status="$(read_build_value "BUILD_LAST_STATUS" 2>/dev/null || true)"
 
   if status_is_running 2>/dev/null; then
     live_runtime="true"
@@ -2199,6 +2234,11 @@ install_status_text() {
 
   if [ "${has_subscription:-false}" != "true" ]; then
     echo "stopped"
+    return 0
+  fi
+
+  if [ "${build_status:-}" = "failed" ]; then
+    echo "broken"
     return 0
   fi
 
@@ -2216,18 +2256,18 @@ install_status_text() {
   if [ "${live_runtime:-false}" = "true" ] \
     || [ "${runtime_ready:-false}" = "true" ] \
     || [ "${controller_ready:-false}" = "true" ]; then
-    echo "degraded"
+    echo "verifying"
     return 0
   fi
 
-  echo "degraded"
+  echo "verifying"
 }
 
 install_status_label() {
   case "$(install_status_text)" in
     ready) echo "ready" ;;
     stopped) echo "stopped" ;;
-    degraded) echo "degraded" ;;
+    verifying) echo "verifying" ;;
     broken) echo "broken" ;;
     *) echo "unknown" ;;
   esac
@@ -2245,7 +2285,14 @@ install_default_next_action() {
         echo "clashctl add <订阅链接>"
       fi
       ;;
-    degraded|broken)
+    verifying)
+      if status_is_running 2>/dev/null; then
+        echo "clashctl status"
+      else
+        echo "clashon"
+      fi
+      ;;
+    broken)
       if install_has_subscription; then
         echo "clashctl doctor"
       else
@@ -2277,8 +2324,9 @@ install_runtime_brief_line() {
     stopped)
       echo "🔴 当前状态：stopped"
       ;;
-    degraded)
-      echo "🟡 当前状态：degraded"
+    verifying)
+      echo "🟡 当前状态：verifying"
+      echo "🧭 正在确认运行状态，可继续观察或手动启动"
       if [ -n "${mixed_port:-}" ]; then
         echo "🌐 本地代理：http://127.0.0.1:${mixed_port}"
       fi
@@ -2332,8 +2380,9 @@ print_install_summary() {
     stopped)
       echo "🚦 当前状态：⚪ stopped"
       ;;
-    degraded)
-      echo "🚦 当前状态：🟡 degraded"
+    verifying)
+      echo "🚦 当前状态：🟡 verifying"
+      echo "🧭 安装已完成，运行状态仍在确认中"
       if [ -n "${mixed_port:-}" ]; then
         echo "🌐 本地代理：http://127.0.0.1:${mixed_port}"
       fi
