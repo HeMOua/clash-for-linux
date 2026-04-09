@@ -100,7 +100,7 @@ usage_advanced() {
 
 💡 Notes:
   当前编译链固定为 active-only
-  只处理当前主订阅，不再提供 merge / policy / select 编译集合
+  只处理当前 active 主订阅
   Tun 模式属于高级能力，开启前建议先执行：clashctl tun doctor
 EOF
 }
@@ -340,27 +340,33 @@ cmd_ui() {
   esac
 }
 
-status_build_mode() {
-  read_build_value "BUILD_MODE" 2>/dev/null || true
-}
-
 status_build_active_source() {
   read_build_value "BUILD_ACTIVE_SOURCE" 2>/dev/null || true
 }
 
-status_build_selected_sources() {
-  read_build_value "BUILD_SELECTED_SOURCES" 2>/dev/null || true
-}
+status_build_active_sources() {
+  local value
 
-status_build_included_sources() {
+  value="$(read_build_value "BUILD_ACTIVE_SOURCES" 2>/dev/null || true)"
+  if [ -n "${value:-}" ]; then
+    echo "$value"
+    return 0
+  fi
+
+  # 兼容历史 build.env
   read_build_value "BUILD_INCLUDED_SOURCES" 2>/dev/null || true
 }
 
-status_build_min_success_sources() {
-  read_build_value "BUILD_MIN_SUCCESS_SOURCES" 2>/dev/null || true
-}
+status_build_failed_active_sources() {
+  local value
 
-status_build_failed_sources() {
+  value="$(read_build_value "BUILD_FAILED_ACTIVE_SOURCES" 2>/dev/null || true)"
+  if [ -n "${value:-}" ]; then
+    echo "$value"
+    return 0
+  fi
+
+  # 兼容历史 build.env
   read_build_value "BUILD_FAILED_SOURCES" 2>/dev/null || true
 }
 
@@ -1727,7 +1733,7 @@ print_status_summary_compact() {
 
 print_status_summary_verbose() {
   local running_text profile mixed_port controller
-  local build_mode current_active build_included build_failed build_status build_time
+  local current_active build_active_sources build_failed_active_sources build_status build_time
   local build_block_reason build_block_time
   local last_switch_from last_switch_to last_switch_time
   local controller_ok current_proxy_lines
@@ -1744,10 +1750,9 @@ print_status_summary_verbose() {
   controller="$(status_read_controller 2>/dev/null || true)"
 
 
-  build_mode="$(status_build_mode)"
   current_active="$(active_subscription_name 2>/dev/null || true)"
-  build_included="$(status_build_included_sources)"
-  build_failed="$(status_build_failed_sources)"
+  build_active_sources="$(status_build_active_sources)"
+  build_failed_active_sources="$(status_build_failed_active_sources)"
   build_status="$(status_build_last_status)"
   build_time="$(status_build_last_time)"
 
@@ -1876,8 +1881,8 @@ print_status_summary_verbose() {
     echo "🧩 最近编译：未知"
   fi
 
-  [ -n "${build_included:-}" ] && echo "🟢 实际参与编译：$build_included"
-  [ -n "${build_failed:-}" ] && echo "❌ 编译失败源：$build_failed"
+  [ -n "${build_active_sources:-}" ] && echo "🟢 实际参与编译：$build_active_sources"
+  [ -n "${build_failed_active_sources:-}" ] && echo "❌ 编译失败源：$build_failed_active_sources"
   echo
 
   echo "【当前订阅健康】"
@@ -2109,6 +2114,16 @@ doctor_fail() {
   echo "  ✘ $1"
 }
 
+doctor_yq_available() {
+  local yq_path
+  yq_path="$(yq_bin 2>/dev/null || true)"
+  [ -n "${yq_path:-}" ] && [ -x "$yq_path" ]
+}
+
+doctor_warn_skip_yq_parse() {
+  doctor_warn "缺少 yq，跳过配置解析类检查"
+}
+
 doctor_install_context() {
   doctor_print_title "安装环境检查"
 
@@ -2254,6 +2269,16 @@ doctor_config() {
   [ -n "${active_profile:-}" ] || active_profile="default"
   doctor_ok "当前 Profile：$active_profile"
 
+  if ! doctor_yq_available; then
+    doctor_warn_skip_yq_parse
+    if test_runtime_config "$config_file" >/dev/null 2>&1; then
+      doctor_ok "配置校验通过"
+    else
+      doctor_fail "配置校验失败"
+    fi
+    return 0
+  fi
+
   mixed_port="$("$(yq_bin)" eval '.["mixed-port"] // .port // ""' "$config_file" 2>/dev/null | head -n 1)"
   controller="$("$(yq_bin)" eval '.["external-controller"] // ""' "$config_file" 2>/dev/null | head -n 1)"
 
@@ -2287,6 +2312,13 @@ doctor_subscription() {
     return 0
   fi
 
+  doctor_ok "订阅策略：active-only"
+
+  if ! doctor_yq_available; then
+    doctor_warn_skip_yq_parse
+    return 0
+  fi
+
   active="$(active_subscription_name 2>/dev/null || true)"
 
   total="$("$(yq_bin)" eval '.sources | keys | length' "$file" 2>/dev/null || echo 0)"
@@ -2303,7 +2335,6 @@ doctor_subscription() {
   )"
   auto_disabled_count="$(printf '%s\n' "${auto_disabled_count:-}" | awk 'NF{c++} END{print c+0}')"
 
-  doctor_ok "订阅策略：active-only"
   [ -n "${active:-}" ] && doctor_ok "当前主订阅：$active" || doctor_warn "当前主订阅为空"
 
   doctor_ok "订阅源总数：$total"
@@ -2325,15 +2356,15 @@ doctor_subscription() {
 }
 
 doctor_build() {
-  local active included failed last_status last_time
+  local active active_sources failed_active_sources last_status last_time
   local block_reason block_time
   local error_summary error_detail error_stage
 
   doctor_print_title "编译状态检查"
 
   active="$(read_build_value "BUILD_ACTIVE_SOURCE" 2>/dev/null || true)"
-  included="$(read_build_value "BUILD_INCLUDED_SOURCES" 2>/dev/null || true)"
-  failed="$(read_build_value "BUILD_FAILED_SOURCES" 2>/dev/null || true)"
+  active_sources="$(status_build_active_sources 2>/dev/null || true)"
+  failed_active_sources="$(status_build_failed_active_sources 2>/dev/null || true)"
   last_status="$(read_build_value "BUILD_LAST_STATUS" 2>/dev/null || true)"
   last_time="$(read_build_value "BUILD_LAST_TIME" 2>/dev/null || true)"
   error_summary="$(read_build_value "BUILD_LAST_ERROR_SUMMARY" 2>/dev/null || true)"
@@ -2342,7 +2373,7 @@ doctor_build() {
   block_reason="$(read_runtime_event_value "RUNTIME_LAST_BUILD_BLOCK_REASON" 2>/dev/null || true)"
   block_time="$(read_runtime_event_value "RUNTIME_LAST_BUILD_BLOCK_TIME" 2>/dev/null || true)"
 
-  if [ -z "${active:-}${included:-}${failed:-}${last_status:-}${last_time:-}${error_summary:-}${error_stage:-}${block_reason:-}" ]; then
+  if [ -z "${active:-}${active_sources:-}${failed_active_sources:-}${last_status:-}${last_time:-}${error_summary:-}${error_stage:-}${block_reason:-}" ]; then
     doctor_warn "未找到编译元数据（build.env）"
     return 0
   fi
@@ -2355,14 +2386,14 @@ doctor_build() {
     doctor_warn "当前主订阅为空"
   fi
 
-  if [ -n "${included:-}" ]; then
-    doctor_ok "实际参与编译：$included"
+  if [ -n "${active_sources:-}" ]; then
+    doctor_ok "实际参与编译：$active_sources"
   else
     doctor_warn "没有任何订阅参与编译"
   fi
 
-  if [ -n "${failed:-}" ]; then
-    doctor_warn "失败订阅源：$failed"
+  if [ -n "${failed_active_sources:-}" ]; then
+    doctor_warn "失败订阅源：$failed_active_sources"
   else
     doctor_ok "失败订阅源：无"
   fi
@@ -2459,6 +2490,18 @@ doctor_ports() {
 
   if [ ! -s "$config_file" ]; then
     doctor_warn "运行配置不存在，跳过端口检查"
+    return 0
+  fi
+
+  if ! doctor_yq_available; then
+    doctor_warn_skip_yq_parse
+    if [ -x "$(subconverter_bin)" ]; then
+      if is_port_in_use "$(subconverter_port)"; then
+        doctor_ok "subconverter 端口已监听：$(subconverter_port)"
+      else
+        doctor_warn "subconverter 端口未监听：$(subconverter_port)"
+      fi
+    fi
     return 0
   fi
 
@@ -2798,7 +2841,7 @@ cmd_config() {
       echo
       echo "🧩 说明："
       echo "  当前编译链固定为 active-only"
-      echo "  只处理当前主订阅，不再提供 merge / policy / select 编译集合"
+      echo "  只处理当前 active 主订阅"
       echo
       ui_next "clashctl config show"
       ui_blank
