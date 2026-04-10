@@ -2178,6 +2178,39 @@ EOF
   ensure_command_install_dir_in_shell_path
 }
 
+install_alias_command_wrappers() {
+  local alias_file install_dir wrapper_name
+
+  alias_file="$(alias_source_file)"
+  install_dir="$(command_install_dir)"
+
+  [ -f "$alias_file" ] || die "未找到 alias 脚本：$alias_file"
+
+  mkdir -p "$install_dir"
+
+  for wrapper_name in \
+    clashon \
+    clashoff \
+    clashproxy \
+    clashls \
+    clashselect \
+    clashui \
+    clashsecret \
+    clashtun \
+    clashupgrade \
+    clashmixin
+  do
+    cat > "$install_dir/$wrapper_name" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export CLASH_WRAPPER_EXEC="1"
+source "$alias_file"
+$wrapper_name "\$@"
+EOF
+    chmod +x "$install_dir/$wrapper_name"
+  done
+}
+
 cleanup_legacy_shell_entries() {
   local shell_rc
 
