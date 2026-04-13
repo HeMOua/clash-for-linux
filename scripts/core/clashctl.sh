@@ -606,6 +606,71 @@ status_build_effective_status() {
   system_state_build_status 2>/dev/null || true
 }
 
+runtime_mixed_port_bind_failure_line() {
+  local log_file="$LOG_DIR/mihomo.out.log"
+  local mixed_port line
+
+  runtime_config_exists 2>/dev/null || return 1
+  status_is_running 2>/dev/null && return 1
+  [ -f "$log_file" ] || return 1
+
+  mixed_port="$(status_read_mixed_port 2>/dev/null || true)"
+  if [ -n "${mixed_port:-}" ] && [ "$mixed_port" != "null" ]; then
+    line="$(grep -Ei "Start Mixed.*server error: listen tcp .*:${mixed_port}:.*(operation not permitted|permission denied|address already in use)" "$log_file" 2>/dev/null | tail -n 1 || true)"
+  fi
+
+  if [ -z "${line:-}" ]; then
+    line="$(grep -Ei 'Start Mixed.*server error: listen tcp .*:.*(operation not permitted|permission denied|address already in use)' "$log_file" 2>/dev/null | tail -n 1 || true)"
+  fi
+
+  [ -n "${line:-}" ] || return 1
+  printf '%s\n' "$line"
+}
+
+runtime_mixed_port_bind_failure_kind() {
+  local line lower
+
+  line="$(runtime_mixed_port_bind_failure_line 2>/dev/null || true)"
+  [ -n "${line:-}" ] || return 1
+
+  lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *"address already in use"*)
+      echo "address_in_use"
+      ;;
+    *"operation not permitted"*|*"permission denied"*)
+      echo "bind_denied"
+      ;;
+    *)
+      echo "bind_failed"
+      ;;
+  esac
+}
+
+runtime_mixed_port_bind_failure_text() {
+  case "$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)" in
+    address_in_use) echo "mixed-port 端口被占用" ;;
+    bind_denied) echo "mixed-port 绑定被拒绝" ;;
+    bind_failed) echo "mixed-port 绑定失败" ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_mixed_port_bind_failure_port() {
+  local port line
+
+  port="$(status_read_mixed_port 2>/dev/null || true)"
+  if [ -n "${port:-}" ] && [ "$port" != "null" ]; then
+    echo "$port"
+    return 0
+  fi
+
+  line="$(runtime_mixed_port_bind_failure_line 2>/dev/null || true)"
+  [ -n "${line:-}" ] || return 1
+
+  printf '%s\n' "$line" | grep -Eo ':[0-9]+:' | tail -n 1 | tr -d ':'
+}
+
 system_state_runtime_status() {
   if status_is_running; then
     if proxy_controller_reachable 2>/dev/null; then
@@ -648,6 +713,11 @@ system_state_subscription_status() {
 system_state_risk_level() {
   local risk
 
+  if runtime_mixed_port_bind_failure_kind >/dev/null 2>&1; then
+    echo "high"
+    return 0
+  fi
+
   if status_is_running 2>/dev/null && ! proxy_controller_reachable 2>/dev/null; then
     echo "high"
     return 0
@@ -674,7 +744,7 @@ system_state_summary() {
   local runtime_status build_status subscription_status risk_level
   local config_source fallback_used build_applied
   local tun_enabled tun_effective tun_container_mode tun_kernel_support
-  local overall
+  local bind_failure_kind overall
 
   runtime_status="$(system_state_runtime_status)"
   build_status="$(system_state_build_status)"
@@ -683,6 +753,7 @@ system_state_summary() {
   config_source="$(status_runtime_config_source)"
   fallback_used="$(runtime_last_fallback_used 2>/dev/null || true)"
   build_applied="$(status_runtime_build_applied)"
+  bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
 
   tun_enabled="$(status_tun_enabled)"
   tun_effective="$(status_tun_effective_status)"
@@ -693,6 +764,8 @@ system_state_summary() {
     && [ "$build_status" = "success" ] \
     && [ "$subscription_status" = "healthy" ]; then
     overall="ready"
+  elif [ "$runtime_status" = "stopped" ] && [ -n "${bind_failure_kind:-}" ]; then
+    overall="broken"
   elif [ "$runtime_status" = "stopped" ]; then
     overall="stopped"
   elif [ "$build_status" = "failed" ] || [ "$build_status" = "blocked" ] || [ "$subscription_status" = "invalid" ] || [ "$subscription_status" = "missing" ]; then
@@ -707,6 +780,7 @@ RUNTIME_STATE=$runtime_status
 BUILD_STATE=$build_status
 SUBSCRIPTION_STATE=$subscription_status
 RISK_LEVEL=$risk_level
+BIND_FAILURE_STATE=${bind_failure_kind:-none}
 CONFIG_SOURCE=${config_source:-unknown}
 FALLBACK_USED=${fallback_used:-false}
 BUILD_APPLIED=${build_applied:-unknown}
@@ -738,7 +812,11 @@ system_state_connectivity_text() {
       echo "未连接（代理未启动）"
       ;;
     broken)
-      echo "不可用（配置或订阅异常）"
+      if [ "${BIND_FAILURE_STATE:-none}" != "none" ]; then
+        echo "不可用（mixed-port 绑定失败）"
+      else
+        echo "不可用（配置或订阅异常）"
+      fi
       ;;
     *)
       echo "未知"
@@ -763,6 +841,11 @@ system_state_default_action() {
 
   case "$SYSTEM_STATE" in
     stopped)
+      if [ "${BIND_FAILURE_STATE:-none}" != "none" ]; then
+        echo "clashctl logs mihomo"
+        return 0
+      fi
+
       if [ "$SUBSCRIPTION_STATE" = "missing" ]; then
         echo "clashctl add <订阅链接>"
       else
@@ -770,6 +853,11 @@ system_state_default_action() {
       fi
       ;;
     broken)
+      if [ "${BIND_FAILURE_STATE:-none}" != "none" ]; then
+        echo "clashctl logs mihomo"
+        return 0
+      fi
+
       if [ "$SUBSCRIPTION_STATE" = "missing" ]; then
         echo "clashctl add <订阅链接>"
       else
@@ -800,7 +888,9 @@ system_state_problem_lines() {
       return 0
       ;;
     stopped)
-      if [ "$SUBSCRIPTION_STATE" = "missing" ]; then
+      if [ "${BIND_FAILURE_STATE:-none}" != "none" ]; then
+        echo "• $(runtime_mixed_port_bind_failure_text)"
+      elif [ "$SUBSCRIPTION_STATE" = "missing" ]; then
         echo "• 当前没有可用订阅"
       else
         echo "• 代理内核未启动"
@@ -811,6 +901,7 @@ system_state_problem_lines() {
       [ "$SUBSCRIPTION_STATE" = "degraded" ] && echo "• 当前主订阅健康异常"
       ;;
     broken)
+      [ "${BIND_FAILURE_STATE:-none}" != "none" ] && echo "• $(runtime_mixed_port_bind_failure_text)"
       [ "$BUILD_STATE" = "failed" ] && echo "• 最近一次编译失败"
       [ "$SUBSCRIPTION_STATE" = "missing" ] && echo "• 当前没有主订阅"
       [ "$SUBSCRIPTION_STATE" = "invalid" ] && echo "• 当前主订阅无效"
@@ -822,6 +913,24 @@ system_state_problem_lines() {
 
 system_state_recommendation_lines() {
   load_system_state
+
+  if [ "${BIND_FAILURE_STATE:-none}" != "none" ]; then
+    case "$BIND_FAILURE_STATE" in
+      address_in_use)
+        echo "1. 处理 mixed-port 端口占用，或调整 MIXED_PORT 后重新生成配置"
+        echo "2. clashctl logs mihomo"
+        ;;
+      bind_denied)
+        echo "1. 检查当前环境权限/端口可绑定性，或改用可绑定的 MIXED_PORT"
+        echo "2. clashctl logs mihomo"
+        ;;
+      *)
+        echo "1. 查看 mixed-port 绑定失败日志"
+        echo "2. clashctl logs mihomo"
+        ;;
+    esac
+    return 0
+  fi
 
   case "$SYSTEM_STATE" in
     ready)
@@ -1485,11 +1594,13 @@ status_risk_reason_lines() {
   local build_block_reason build_block_time
   local fallback_used fallback_time fallback_reason
   local tun_enabled tun_effective tun_container_mode tun_kernel_support tun_verify_reason
+  local bind_failure_text
 
   build_status="$(status_build_last_status 2>/dev/null || true)"
   active="$(active_subscription_name 2>/dev/null || true)"
   controller_ok="false"
   proxy_controller_reachable 2>/dev/null && controller_ok="true"
+  bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
 
   build_block_reason="$(status_runtime_last_build_block_reason 2>/dev/null || true)"
   build_block_time="$(status_runtime_last_build_block_time 2>/dev/null || true)"
@@ -1503,7 +1614,11 @@ status_risk_reason_lines() {
   tun_verify_reason="$(status_tun_last_verify_reason 2>/dev/null || true)"
 
   if ! status_is_running; then
-    echo "• 代理内核未启动"
+    if [ -n "${bind_failure_text:-}" ]; then
+      echo "• ${bind_failure_text}"
+    else
+      echo "• 代理内核未启动"
+    fi
   fi
 
   if [ "$controller_ok" = "false" ] && status_is_running; then
@@ -1563,8 +1678,15 @@ status_recommendation_lines() {
 
 status_current_proxy_brief() {
   local default_group default_current fallback_group fallback_current
+  local bind_failure_text
 
   if ! status_is_running; then
+    bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
+    if [ -n "${bind_failure_text:-}" ]; then
+      echo "$bind_failure_text"
+      return 0
+    fi
+
     echo "未启动"
     return 0
   fi
@@ -1604,8 +1726,25 @@ system_proxy_supported_state() {
 
 connectivity_issue_code() {
   local active group_count
+  local bind_failure_kind
 
   if ! status_is_running; then
+    bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
+    case "${bind_failure_kind:-}" in
+      bind_denied)
+        echo "mixed_port_bind_denied"
+        return 0
+        ;;
+      address_in_use)
+        echo "mixed_port_address_in_use"
+        return 0
+        ;;
+      bind_failed)
+        echo "mixed_port_bind_failed"
+        return 0
+        ;;
+    esac
+
     echo "runtime_stopped"
     return 0
   fi
@@ -1660,6 +1799,9 @@ connectivity_issue_code() {
 connectivity_issue_text() {
   case "$(connectivity_issue_code)" in
     ok) echo "可用（代理链路已闭环）" ;;
+    mixed_port_bind_denied) echo "不可用（mixed-port 绑定被拒绝）" ;;
+    mixed_port_address_in_use) echo "不可用（mixed-port 端口被占用）" ;;
+    mixed_port_bind_failed) echo "不可用（mixed-port 绑定失败）" ;;
     runtime_stopped) echo "不可用（代理内核未启动）" ;;
     controller_unreachable) echo "异常（内核已运行，但控制器不可访问）" ;;
     config_invalid) echo "异常（当前运行配置不可用）" ;;
@@ -1679,6 +1821,9 @@ connectivity_next_action() {
       ;;
     runtime_stopped)
       echo "clashon"
+      ;;
+    mixed_port_bind_denied|mixed_port_address_in_use|mixed_port_bind_failed)
+      echo "clashctl logs mihomo"
       ;;
     controller_unreachable)
       echo "clashctl doctor"
@@ -1711,6 +1856,7 @@ connectivity_evidence_lines() {
   local runtime_running controller_ok build_status subscription_status
   local group_count expected_proxy actual_proxy active config_source
   local system_proxy_state system_proxy_supported_text
+  local bind_failure_kind bind_failure_line
 
   if status_is_running; then
     runtime_running="true"
@@ -1733,9 +1879,13 @@ connectivity_evidence_lines() {
   actual_proxy="$(system_proxy_http_value 2>/dev/null || true)"
   system_proxy_state="$(system_proxy_status 2>/dev/null || echo off)"
   system_proxy_supported_text="$(system_proxy_supported_state)"
+  bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
+  bind_failure_line="$(runtime_mixed_port_bind_failure_line 2>/dev/null || true)"
 
   echo "• runtime_running = ${runtime_running:-false}"
   echo "• controller_reachable = ${controller_ok:-false}"
+  [ -n "${bind_failure_kind:-}" ] && echo "• mixed_port_bind_failure = ${bind_failure_kind}"
+  [ -n "${bind_failure_line:-}" ] && echo "• mixed_port_bind_log = ${bind_failure_line}"
   echo "• build_status = ${build_status:-unknown}"
   echo "• subscription_status = ${subscription_status:-unknown}"
   echo "• active_subscription = ${active:-unset}"
@@ -1932,7 +2082,7 @@ print_status_summary_compact() {
   local profile mixed_port controller controller_lan controller_public
   local running_text user_connectivity user_risk current_proxy_brief system_proxy_text
   local current_active dashboard_text dashboard_source_text dashboard_policy_text secret_text
-  local tun_text
+  local tun_text bind_failure_text
 
   profile="$(show_active_profile 2>/dev/null || true)"
   [ -n "${profile:-}" ] || profile="default"
@@ -1943,9 +2093,12 @@ print_status_summary_compact() {
   controller_public="$(status_read_controller_public 2>/dev/null || true)"
   current_active="$(active_subscription_name 2>/dev/null || true)"
   tun_text="$(status_tun_effective_text)"
+  bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
 
   if status_is_running; then
     running_text="🐱 已开启"
+  elif [ -n "${bind_failure_text:-}" ]; then
+    running_text="❗ ${bind_failure_text}"
   else
     running_text="❗ 未开启"
   fi
@@ -2041,6 +2194,7 @@ print_status_summary_verbose() {
   local install_backend_text install_container_text install_verify_text port_adjustment_text
   local tun_enabled tun_effective tun_stack tun_container_text tun_kernel_text tun_verify_result tun_verify_reason tun_verify_time
   local system_proxy_text dashboard_text dashboard_source_text dashboard_policy_text secret_text
+  local bind_failure_text
 
   profile="$(show_active_profile 2>/dev/null || true)"
   [ -n "${profile:-}" ] || profile="default"
@@ -2071,9 +2225,12 @@ print_status_summary_verbose() {
   build_applied="$(status_runtime_build_applied 2>/dev/null || true)"
   build_applied_time="$(status_runtime_build_applied_time 2>/dev/null || true)"
   build_applied_reason="$(status_runtime_build_applied_reason 2>/dev/null || true)"
+  bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
 
   if status_is_running; then
     running_text="🐱 已开启"
+  elif [ -n "${bind_failure_text:-}" ]; then
+    running_text="❗ ${bind_failure_text}"
   else
     running_text="❗ 未开启"
   fi
@@ -3083,7 +3240,7 @@ doctor_service() {
 }
 
 doctor_ports() {
-  local config_file mixed_port controller controller_port
+  local config_file mixed_port controller controller_port bind_failure_kind
 
   doctor_print_title "端口检查"
 
@@ -3109,9 +3266,16 @@ doctor_ports() {
   mixed_port="$("$(yq_bin)" eval '.["mixed-port"] // .port // ""' "$config_file" 2>/dev/null | head -n 1)"
   controller="$("$(yq_bin)" eval '.["external-controller"] // ""' "$config_file" 2>/dev/null | head -n 1)"
   controller_port="${controller##*:}"
+  bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
 
   if [ -n "${mixed_port:-}" ] && [ "$mixed_port" != "null" ]; then
-    if is_port_in_use "$mixed_port"; then
+    if [ "$bind_failure_kind" = "bind_denied" ]; then
+      doctor_fail "mixed-port 绑定被拒绝：$mixed_port"
+    elif [ "$bind_failure_kind" = "address_in_use" ]; then
+      doctor_fail "mixed-port 端口被占用：$mixed_port"
+    elif [ -n "${bind_failure_kind:-}" ]; then
+      doctor_fail "mixed-port 绑定失败：$mixed_port"
+    elif is_port_in_use "$mixed_port"; then
       doctor_ok "代理端口已监听：$mixed_port"
     else
       doctor_warn "代理端口未监听：$mixed_port"
@@ -3305,11 +3469,12 @@ doctor_active_switch() {
 }
 
 doctor_controller() {
-  local controller group_count current_examples
+  local controller group_count current_examples bind_failure_text
 
   doctor_print_title "控制器检查"
 
   controller="$(status_read_controller 2>/dev/null || true)"
+  bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
 
   if [ -z "${controller:-}" ] || [ "$controller" = "null" ]; then
     doctor_fail "未解析到 external-controller"
@@ -3319,7 +3484,11 @@ doctor_controller() {
   doctor_ok "控制器地址：$(display_controller_local_addr "$controller" 2>/dev/null || echo "$controller")"
 
   if ! status_is_running; then
-    doctor_warn "内核未运行，无法检查控制器 API"
+    if [ -n "${bind_failure_text:-}" ]; then
+      doctor_warn "${bind_failure_text}，无法检查控制器 API"
+    else
+      doctor_warn "内核未运行，无法检查控制器 API"
+    fi
     return 0
   fi
 
@@ -3956,6 +4125,11 @@ doctor_risk_level() {
   proxy_controller_reachable 2>/dev/null && controller_ok="true"
   runtime_config_exists && config_ok="true"
 
+  if runtime_mixed_port_bind_failure_kind >/dev/null 2>&1; then
+    echo "high"
+    return
+  fi
+
   if [ "$running" = "true" ] && [ "$controller_ok" = "true" ] && [ "$config_ok" = "true" ]; then
     echo "low"
     return
@@ -3984,15 +4158,18 @@ doctor_risk_text() {
 }
 
 doctor_problem_lines() {
-  local active_sub
+  local active_sub bind_failure_text
 
   active_sub="$(active_subscription_name 2>/dev/null || true)"
+  bind_failure_text="$(runtime_mixed_port_bind_failure_text 2>/dev/null || true)"
 
   if ! runtime_config_exists; then
     echo "🚨 运行配置缺失"
   fi
 
-  if ! status_is_running; then
+  if [ -n "${bind_failure_text:-}" ]; then
+    echo "🚨 ${bind_failure_text}"
+  elif ! status_is_running; then
     echo "🚨 代理内核未运行"
   fi
 
@@ -4016,6 +4193,21 @@ doctor_primary_conclusion() {
   fi
 
   if ! status_is_running; then
+    case "$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)" in
+      bind_denied)
+        echo "❗ 当前不可用：mixed-port 绑定被拒绝"
+        return 0
+        ;;
+      address_in_use)
+        echo "❗ 当前不可用：mixed-port 端口被占用"
+        return 0
+        ;;
+      bind_failed)
+        echo "❗ 当前不可用：mixed-port 绑定失败"
+        return 0
+        ;;
+    esac
+
     echo "🟡 当前未连接：代理内核未启动"
     return 0
   fi
@@ -4029,9 +4221,11 @@ doctor_primary_conclusion() {
 }
 
 doctor_recommendation_lines() {
-  local active_sub
+  local active_sub bind_failure_kind mixed_port
 
   active_sub="$(active_subscription_name 2>/dev/null || true)"
+  bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
+  mixed_port="$(runtime_mixed_port_bind_failure_port 2>/dev/null || status_read_mixed_port 2>/dev/null || true)"
 
   if ! runtime_config_exists; then
     if [ -n "$(subscription_url 2>/dev/null || true)" ]; then
@@ -4042,7 +4236,23 @@ doctor_recommendation_lines() {
     return 0
   fi
 
-  if ! status_is_running; then
+  if [ -n "${bind_failure_kind:-}" ]; then
+    case "$bind_failure_kind" in
+      bind_denied)
+        echo "💡 mixed-port 绑定被拒绝：检查当前环境权限/端口可绑定性（${mixed_port:-unknown}）"
+        echo "💡 如该端口在当前环境不可绑定，请改用可绑定的 MIXED_PORT 后重新生成配置"
+        ;;
+      address_in_use)
+        echo "💡 mixed-port 端口被占用：释放 ${mixed_port:-unknown}，或调整 MIXED_PORT 后重新生成配置"
+        echo "💡 可用 ss -ltnp / netstat -lntp 查看端口占用"
+        ;;
+      *)
+        echo "💡 mixed-port 绑定失败：先查看内核日志确认端口错误"
+        ;;
+    esac
+    echo "💡 clashctl logs mihomo"
+    return 0
+  elif ! status_is_running; then
     echo "💡 clashon"
     return 0
   fi
@@ -4070,11 +4280,13 @@ doctor_recommendation_lines() {
 }
 
 doctor_evidence_lines() {
-  local active_sub mixed_port controller
+  local active_sub mixed_port controller bind_failure_kind bind_failure_line
 
   active_sub="$(active_subscription_name 2>/dev/null || true)"
-  mixed_port="$(status_read_mixed_port 2>/dev/null || true)"
+  mixed_port="$(runtime_mixed_port_bind_failure_port 2>/dev/null || status_read_mixed_port 2>/dev/null || true)"
   controller="$(status_read_controller 2>/dev/null || true)"
+  bind_failure_kind="$(runtime_mixed_port_bind_failure_kind 2>/dev/null || true)"
+  bind_failure_line="$(runtime_mixed_port_bind_failure_line 2>/dev/null || true)"
 
   if runtime_config_exists; then
     echo "🔍 运行配置：存在"
@@ -4092,6 +4304,11 @@ doctor_evidence_lines() {
     echo "🔍 控制器状态：可访问"
   else
     echo "🔍 控制器状态：不可访问"
+  fi
+
+  if [ -n "${bind_failure_kind:-}" ]; then
+    echo "🔍 mixed-port 绑定错误：${bind_failure_kind}"
+    [ -n "${bind_failure_line:-}" ] && echo "🔍 日志证据：${bind_failure_line}"
   fi
 
   if [ -n "${active_sub:-}" ]; then
