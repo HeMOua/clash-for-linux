@@ -157,6 +157,24 @@ clashctl sub rename <旧名称> <新名称>
 clashctl sub remove <名称>
 ```
 
+WSL / 普通用户如果无权写入 `/etc/environment`，`clashon` 会自动降级：运行时照常启动，当前 Shell 代理变量生效；系统代理持久接管和开机代理保持不可用。
+
+### 本地订阅
+
+可以先手动下载 Clash 格式的订阅 YAML 文件到本地，再通过 `file://` 添加：
+
+格式：`clashctl add "file:///绝对路径/xxx.yaml" 名称`
+
+```bash
+mkdir -p ~/.config/clash-for-linux/subscriptions
+curl -L "https://example.com/sub.yaml" -o ~/.config/clash-for-linux/subscriptions/home.yaml
+clashctl add "file://$HOME/.config/clash-for-linux/subscriptions/home.yaml" home
+clashctl use home
+clashon
+```
+
+`file://` 只支持 Clash 本地 YAML 配置，不支持 convert 格式订阅。如果订阅源需要转换，请先转换为 Clash YAML 后再保存到本地文件。
+
 ------
 
 ## 🏗️ 架构设计架构简述
