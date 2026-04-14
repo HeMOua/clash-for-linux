@@ -89,7 +89,7 @@ ui_ok() {
 }
 
 ui_info() {
-  printf 'ℹ️ %s\n' "$*"
+  printf 'ℹ️  %s\n' "$*"
 }
 
 ui_warn() {
