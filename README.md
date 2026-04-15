@@ -30,10 +30,11 @@
 
 ### 适用场景
 
-- Linux 云服务器（VPS）
-- 家用 NAS / 小主机（x86 / ARM）
-- 需要稳定访问 GitHub、Go / Node / Docker 生态的开发环境
-- 不希望长期手动维护 Clash 运行状态的用户
+- Linux 云服务器（VPS / 远程开发环境）
+- 本地开发环境（Ubuntu / Debian / WSL）
+- 路由 / 轻量系统（OpenWrt / NAS / 小主机 x86 / ARM）
+- 需要稳定访问 GitHub、Go / Node / Docker 生态的开发者
+- 不希望手动维护 Clash 运行状态的用户
 
 # 🚀 一键安装（推荐）
 
