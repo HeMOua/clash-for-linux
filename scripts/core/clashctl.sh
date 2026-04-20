@@ -287,9 +287,9 @@ cmd_on() {
     if [ "$system_proxy_degraded" = "true" ]; then
       ui_warn "当前通过 clashctl 子进程执行，不能修改当前 Shell 代理变量"
     else
-      ui_warn "当前通过 clashctl 子进程执行，已开启系统代理，但不会修改当前 Shell 代理变量"
+      ui_warn "当前通过 clashctl 子进程执行，已开启系统代理，但不会修改当前终端的 Shell 变量"
     fi
-    ui_next "需要当前 Shell 立即生效：source shell 入口后执行 clashon，或重新打开终端"
+    ui_next "当前终端如需立即生效：重新打开终端后使用 clashon，或手动 source shell 入口"
     ui_blank
   fi
 

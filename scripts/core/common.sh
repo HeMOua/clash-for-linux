@@ -2436,6 +2436,8 @@ EOF
   for shell_rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
     install_rc_source_block "$shell_rc" "$profile_file"
   done
+
+  install_alias_command_wrappers
 }
 
 remove_clashctl_entry() {
@@ -2925,4 +2927,8 @@ print_install_summary() {
   if [ -f "$clashctl_file" ]; then
     CLASH_UI_BOX_ONLY=1 bash "$clashctl_file" ui || true
   fi
+
+  echo
+  echo "💡 clashon / clashoff 为 shell 快捷入口；新终端会自动生效"
+  echo "💡 当前终端若暂不可用，请先使用 clashctl on / clashctl off"
 }
