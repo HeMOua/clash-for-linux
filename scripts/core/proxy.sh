@@ -293,6 +293,35 @@ proxy_group_is_selector() {
   esac
 }
 
+proxy_group_is_manual_selector() {
+  proxy_group_supports_manual_pick "$1"
+}
+
+proxy_group_is_auto_managed() {
+  local group="$1"
+  local type normalized_type
+
+  [ -n "${group:-}" ] || return 0
+  proxy_group_exists "$group" || return 0
+
+  type="$(proxy_group_type "$group" 2>/dev/null || true)"
+  normalized_type="$(printf '%s' "${type:-}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$normalized_type" in
+    urltest|url-test|fallback|loadbalance|load-balance)
+      return 0
+      ;;
+  esac
+
+  case "$group" in
+    自动选择|故障转移)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 proxy_group_list() {
   proxy_groups_json \
     | "$(yq_bin)" -p=json eval '
@@ -360,6 +389,40 @@ proxy_group_selectable_nodes() {
   done < <(proxy_group_nodes "$group")
 }
 
+proxy_group_supports_manual_pick() {
+  local group="$1"
+  local node
+  local has_now=""
+
+  [ -n "${group:-}" ] || return 1
+  proxy_group_exists "$group" || return 1
+  proxy_group_is_auto_managed "$group" && return 1
+
+  has_now="$(
+    proxy_groups_json \
+      | "$(yq_bin)" -p=json eval ".proxies.\"$group\".now != null" - 2>/dev/null \
+      | head -n 1
+  )"
+  [ "${has_now:-false}" = "true" ] || return 1
+
+  while IFS= read -r node; do
+    [ -n "${node:-}" ] || continue
+    return 0
+  done < <(proxy_group_selectable_nodes "$group")
+
+  return 1
+}
+
+proxy_group_manual_list() {
+  local group
+
+  while IFS= read -r group; do
+    [ -n "${group:-}" ] || continue
+    proxy_group_supports_manual_pick "$group" || continue
+    echo "$group"
+  done < <(proxy_group_list)
+}
+
 proxy_group_select() {
   local group="$1"
   local node="$2"
@@ -371,7 +434,7 @@ proxy_group_select() {
   [ -n "${node:-}" ] || die "节点名称不能为空"
 
   proxy_group_exists "$group" || die "策略组不存在：$group"
-  proxy_group_is_selector "$group" || die "该策略组不支持手动切换：$group"
+  proxy_group_supports_manual_pick "$group" || die "该策略组不支持手动切换：$group"
 
   found=false
   while IFS= read -r available_node; do
@@ -510,7 +573,7 @@ ensure_default_proxy_group_relay_selected() {
     else
       switched="${group}|${current}|${relay}"
     fi
-  done < <(proxy_group_list)
+  done < <(proxy_group_manual_list)
 
   [ -n "${switched:-}" ] && echo "$switched"
 }
